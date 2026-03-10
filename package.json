@@ -1,0 +1,11 @@
+{
+  "name": "luoqi-ui",
+  "private": true,
+  "scripts": {
+    "build:ui": "sass app/ui/styles.scss app/ui/styles.css --no-source-map"
+  },
+  "devDependencies": {
+    "@vant/icons": "^1.8.3",
+    "sass": "^1.77.8"
+  }
+}
