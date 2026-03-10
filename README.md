@@ -1,4 +1,4 @@
-# Luoqi Assistant
+# Assistant
 
 基于 pywebview 的桌面自动化流程编排工具，支持全局热键触发、图像识别和流程执行。
 
