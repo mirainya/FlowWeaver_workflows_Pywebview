@@ -10,47 +10,25 @@
   <div class="app-shell">
     <aside class="sidebar">
       <section class="brand-card glass">
-        <div class="eyebrow">Luoqi</div>
         <h1>Luoqi Assistant</h1>
         <p>流程编排、异步识图、运行监控。</p>
-        <div class="hero-meta">
-          <span class="info-pill">流程</span>
-          <span class="info-pill">异步识图</span>
-          <span class="info-pill">主题切换</span>
-        </div>
       </section>
 
-      <section class="summary-grid">
-        <article class="summary-card glass">
-          <span>流程总数</span>
-          <strong id="workflow-count">0</strong>
-        </article>
-        <article class="summary-card glass">
-          <span>启用热键</span>
-          <strong id="enabled-count">0</strong>
-        </article>
-        <article class="summary-card glass">
-          <span>自定义流程</span>
-          <strong id="custom-flow-count">0</strong>
-        </article>
-        <article class="summary-card glass">
-          <span>识图流程</span>
-          <strong id="visual-count">0</strong>
-        </article>
-        <article class="summary-card glass">
-          <span>循环流程</span>
-          <strong id="loop-count">0</strong>
-        </article>
-        <article class="summary-card glass">
-          <span>运行中循环</span>
-          <strong id="active-loop-count">0</strong>
-        </article>
+      <section class="summary-bar glass">
+        <div class="summary-bar-row">
+          <span class="summary-item"><span class="summary-label">流程</span><strong id="workflow-count">0</strong></span>
+          <span class="summary-item"><span class="summary-label">热键</span><strong id="enabled-count">0</strong></span>
+          <span class="summary-item"><span class="summary-label">运行中</span><strong id="active-loop-count">0</strong></span>
+        </div>
+        <div class="summary-bar-row">
+          <span class="summary-item"><span class="summary-label">识图</span><strong id="visual-count">0</strong></span>
+          <span class="summary-item"><span class="summary-label">循环</span><strong id="loop-count">0</strong></span>
+        </div>
       </section>
 
       <section class="guide-card glass">
         <div class="panel-head compact">
           <div>
-            <div class="eyebrow">Runtime</div>
             <h3>运行概览</h3>
           </div>
         </div>
@@ -61,7 +39,6 @@
     <main class="main-panel">
       <section class="hero glass hero-compact">
         <div>
-          <div class="eyebrow">Workspace</div>
           <h2 id="workspace-title">流程</h2>
           <p id="workspace-subtitle">查看、编辑和运行自动化流程。</p>
         </div>
@@ -80,7 +57,6 @@
       <section class="panel glass">
         <div class="panel-head">
           <div>
-            <div class="eyebrow">Navigation</div>
             <h3>工作区</h3>
           </div>
           <div class="panel-actions">
@@ -95,7 +71,6 @@
         <section class="designer-panel glass" id="flow-designer-panel" hidden>
           <div class="designer-head">
             <div class="designer-title-group">
-              <div class="eyebrow">Editor</div>
               <h4 id="designer-title">新建流程</h4>
               <p class="subtle" id="designer-subtitle">配置热键、运行模式和步骤。</p>
             </div>
@@ -105,6 +80,7 @@
                 <span class="status-text" id="designer-save-text">当前内容与已保存版本一致</span>
               </div>
               <div class="designer-actions">
+                <button class="ghost-button" type="button" id="designer-collapse" onclick="window.toggleDesignerCollapse()">收起</button>
                 <button class="ghost-button" type="button" id="designer-reset">新建流程</button>
                 <button class="primary-button" type="button" id="designer-save">保存流程</button>
               </div>
@@ -144,11 +120,11 @@
 
           <div class="step-toolbar">
             <div>
-              <div class="eyebrow">Steps</div>
               <h4>流程步骤</h4>
             </div>
             <button class="ghost-button" type="button" id="designer-step-add">添加步骤</button>
           </div>
+          <div class="step-index-map" id="designer-step-index" hidden></div>
           <div class="step-root" id="designer-step-list"></div>
         </section>
 
@@ -156,29 +132,41 @@
       </section>
 
       <section class="bottom-grid">
-        <section class="panel glass">
-          <div class="panel-head compact">
+        <section class="panel glass collapsible-panel" id="key-event-panel">
+          <div class="panel-head compact clickable-head" onclick="window.toggleBottomPanel('key-event-panel')">
             <div>
-              <div class="eyebrow">Keys</div>
               <h3>按键记录</h3>
             </div>
+            <span class="collapse-indicator">▾</span>
           </div>
-          <div class="activity-list" id="key-event-list"></div>
+          <div class="collapsible-body">
+            <div class="activity-list" id="key-event-list"></div>
+          </div>
         </section>
 
-        <section class="panel glass">
-          <div class="panel-head compact">
+        <section class="panel glass collapsible-panel" id="log-panel">
+          <div class="panel-head compact clickable-head" onclick="window.toggleBottomPanel('log-panel')">
             <div>
-              <div class="eyebrow">Logs</div>
               <h3>运行日志</h3>
             </div>
+            <span class="collapse-indicator">▾</span>
           </div>
-          <div class="log-list" id="log-list"></div>
+          <div class="collapsible-body">
+            <div class="log-list" id="log-list"></div>
+          </div>
         </section>
       </section>
     </main>
   </div>
 
-  <script src="app.js"></script>
+  <script src="utils.js"></script>
+  <script src="state.js"></script>
+  <script src="capture.js"></script>
+  <script src="models.js"></script>
+  <script src="designer.js"></script>
+  <script src="render-designer.js"></script>
+  <script src="render-flow.js"></script>
+  <script src="render-async.js"></script>
+  <script src="main.js"></script>
 </body>
 </html>

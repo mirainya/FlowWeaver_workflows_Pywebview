@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
@@ -81,6 +81,17 @@ def _step_title(kind: str) -> str:
         "set_variable_state": "变量赋值",
         "key_sequence": "按键序列",
         "key_hold": "按住按键",
+        "mouse_scroll": "鼠标滚轮",
+        "mouse_hold": "鼠标长按",
+        "detect_color": "像素取色",
+        "loop": "循环",
+        "call_workflow": "调用子流程",
+        "if_condition": "条件判断",
+        "log": "调试日志",
+        "mouse_drag": "鼠标拖拽",
+        "type_text": "文本输入",
+        "mouse_move": "鼠标移动",
+        "set_variable": "变量赋值",
     }
     return titles.get(kind, kind)
 
@@ -113,6 +124,8 @@ def _normalize_custom_step(raw_step: Any) -> dict[str, Any] | None:
         return {
             "kind": "delay",
             "milliseconds": _clamp_int(raw_step.get("milliseconds", raw_step.get("delay_ms", 100)), 100, 0, 600000),
+            "random_min": _clamp_int(raw_step.get("random_min", 0), 0, 0, 600000),
+            "random_max": _clamp_int(raw_step.get("random_max", 0), 0, 0, 600000),
         }
 
     if kind == "detect_image":
@@ -143,6 +156,7 @@ def _normalize_custom_step(raw_step: Any) -> dict[str, Any] | None:
             "return_cursor": bool(raw_step.get("return_cursor", True)),
             "settle_ms": _clamp_int(raw_step.get("settle_ms", 60), 60, 0, 600000),
             "modifier_delay_ms": _clamp_int(raw_step.get("modifier_delay_ms", 50), 50, 0, 5000),
+            "click_count": _clamp_int(raw_step.get("click_count", 1), 1, 1, 5),
             "modifiers": modifiers,
         }
 
@@ -200,7 +214,160 @@ def _normalize_custom_step(raw_step: Any) -> dict[str, Any] | None:
         return {
             "kind": "key_hold",
             "key": key,
+            "duration_ms": _clamp_int(raw_step.get("duration_ms", 0), 0, 0, 600000),
             "steps": sanitize_custom_steps(raw_step.get("steps", [])),
+        }
+
+    if kind == "mouse_scroll":
+        direction = str(raw_step.get("direction", "down")).strip()
+        if direction not in {"up", "down", "left", "right"}:
+            direction = "down"
+        return {
+            "kind": "mouse_scroll",
+            "direction": direction,
+            "clicks": _clamp_int(raw_step.get("clicks", 3), 3, 1, 100),
+        }
+
+    if kind == "mouse_hold":
+        button = str(raw_step.get("button", "left")).strip()
+        if button not in {"left", "right", "middle"}:
+            button = "left"
+        source = str(raw_step.get("source", "current")).strip()
+        if source not in {"current", "var", "shared", "absolute"}:
+            source = "current"
+        return {
+            "kind": "mouse_hold",
+            "button": button,
+            "duration_ms": _clamp_int(raw_step.get("duration_ms", 500), 500, 0, 600000),
+            "source": source,
+            "var_name": str(raw_step.get("var_name", "target")).strip() or "target",
+            "x": _clamp_int(raw_step.get("x", 0), 0, -100000, 100000),
+            "y": _clamp_int(raw_step.get("y", 0), 0, -100000, 100000),
+            "offset_x": _clamp_int(raw_step.get("offset_x", 0), 0, -100000, 100000),
+            "offset_y": _clamp_int(raw_step.get("offset_y", 0), 0, -100000, 100000),
+            "settle_ms": _clamp_int(raw_step.get("settle_ms", 60), 60, 0, 600000),
+        }
+
+    if kind == "detect_color":
+        source = str(raw_step.get("source", "absolute")).strip()
+        if source not in {"absolute", "var", "shared"}:
+            source = "absolute"
+        return {
+            "kind": "detect_color",
+            "source": source,
+            "x": _clamp_int(raw_step.get("x", 0), 0, -100000, 100000),
+            "y": _clamp_int(raw_step.get("y", 0), 0, -100000, 100000),
+            "var_name": str(raw_step.get("var_name", "target")).strip() or "target",
+            "offset_x": _clamp_int(raw_step.get("offset_x", 0), 0, -100000, 100000),
+            "offset_y": _clamp_int(raw_step.get("offset_y", 0), 0, -100000, 100000),
+            "expected_color": str(raw_step.get("expected_color", "")).strip(),
+            "tolerance": _clamp_int(raw_step.get("tolerance", 20), 20, 0, 255),
+            "save_as": str(raw_step.get("save_as", "color_result")).strip() or "color_result",
+        }
+
+    if kind == "loop":
+        loop_type = str(raw_step.get("loop_type", "count")).strip()
+        if loop_type not in {"count", "while_found", "while_not_found"}:
+            loop_type = "count"
+        variable_scope = str(raw_step.get("variable_scope", "local")).strip()
+        if variable_scope not in {"local", "shared"}:
+            variable_scope = "local"
+        return {
+            "kind": "loop",
+            "loop_type": loop_type,
+            "max_iterations": _clamp_int(raw_step.get("max_iterations", 10), 10, 1, 99999),
+            "var_name": str(raw_step.get("var_name", "target")).strip() or "target",
+            "variable_scope": variable_scope,
+            "steps": sanitize_custom_steps(raw_step.get("steps", [])),
+        }
+
+    if kind == "call_workflow":
+        return {
+            "kind": "call_workflow",
+            "target_workflow_id": str(raw_step.get("target_workflow_id", "")).strip(),
+        }
+
+    if kind == "if_condition":
+        variable_scope = str(raw_step.get("variable_scope", "local")).strip()
+        if variable_scope not in {"local", "shared"}:
+            variable_scope = "local"
+        operator = str(raw_step.get("operator", "==")).strip()
+        if operator not in {">", ">=", "<", "<=", "==", "!="}:
+            operator = "=="
+        return {
+            "kind": "if_condition",
+            "var_name": str(raw_step.get("var_name", "target")).strip() or "target",
+            "variable_scope": variable_scope,
+            "field": str(raw_step.get("field", "found")).strip() or "found",
+            "operator": operator,
+            "value": str(raw_step.get("value", "true")).strip(),
+            "then_steps": sanitize_custom_steps(raw_step.get("then_steps", [])),
+            "else_steps": sanitize_custom_steps(raw_step.get("else_steps", [])),
+        }
+
+    if kind == "log":
+        level = str(raw_step.get("level", "info")).strip()
+        if level not in {"info", "warn", "success"}:
+            level = "info"
+        return {
+            "kind": "log",
+            "message": str(raw_step.get("message", "")).strip(),
+            "level": level,
+        }
+
+    if kind == "mouse_drag":
+        source = str(raw_step.get("source", "absolute")).strip()
+        if source not in {"absolute", "var", "shared"}:
+            source = "absolute"
+        button = str(raw_step.get("button", "left")).strip()
+        if button not in {"left", "right", "middle"}:
+            button = "left"
+        result: dict[str, Any] = {
+            "kind": "mouse_drag",
+            "source": source,
+            "button": button,
+            "duration_ms": _clamp_int(raw_step.get("duration_ms", 300), 300, 0, 60000),
+        }
+        if source == "absolute":
+            result["start_x"] = _clamp_int(raw_step.get("start_x", 0), 0, -100000, 100000)
+            result["start_y"] = _clamp_int(raw_step.get("start_y", 0), 0, -100000, 100000)
+            result["end_x"] = _clamp_int(raw_step.get("end_x", 0), 0, -100000, 100000)
+            result["end_y"] = _clamp_int(raw_step.get("end_y", 0), 0, -100000, 100000)
+        else:
+            result["var_name"] = str(raw_step.get("var_name", "target")).strip() or "target"
+            result["start_offset_x"] = _clamp_int(raw_step.get("start_offset_x", 0), 0, -100000, 100000)
+            result["start_offset_y"] = _clamp_int(raw_step.get("start_offset_y", 0), 0, -100000, 100000)
+            result["end_offset_x"] = _clamp_int(raw_step.get("end_offset_x", 0), 0, -100000, 100000)
+            result["end_offset_y"] = _clamp_int(raw_step.get("end_offset_y", 0), 0, -100000, 100000)
+        return result
+
+    if kind == "type_text":
+        return {
+            "kind": "type_text",
+            "text": str(raw_step.get("text", "")),
+            "interval_ms": _clamp_int(raw_step.get("interval_ms", 50), 50, 0, 5000),
+        }
+
+    if kind == "mouse_move":
+        source = str(raw_step.get("source", "absolute")).strip()
+        if source not in {"absolute", "var", "shared"}:
+            source = "absolute"
+        result_mv: dict[str, Any] = {"kind": "mouse_move", "source": source}
+        if source == "absolute":
+            result_mv["x"] = _clamp_int(raw_step.get("x", 0), 0, -100000, 100000)
+            result_mv["y"] = _clamp_int(raw_step.get("y", 0), 0, -100000, 100000)
+        else:
+            result_mv["var_name"] = str(raw_step.get("var_name", "target")).strip() or "target"
+            result_mv["offset_x"] = _clamp_int(raw_step.get("offset_x", 0), 0, -100000, 100000)
+            result_mv["offset_y"] = _clamp_int(raw_step.get("offset_y", 0), 0, -100000, 100000)
+        return result_mv
+
+    if kind == "set_variable":
+        return {
+            "kind": "set_variable",
+            "var_name": str(raw_step.get("var_name", "target")).strip() or "target",
+            "field": str(raw_step.get("field", "found")).strip() or "found",
+            "value": str(raw_step.get("value", "")),
         }
 
     return None

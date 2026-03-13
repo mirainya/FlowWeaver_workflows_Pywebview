@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -21,6 +22,7 @@ class WorkflowExecutor:
         runtime_event_callback: Callable[[str, dict[str, Any]], None] | None = None,
         shared_variable_resolver: Callable[[str], dict[str, Any] | None] | None = None,
         shared_variable_state_setter: Callable[[str, bool, str], dict[str, Any] | None] | None = None,
+        call_workflow_handler: Callable[[str, Event | None], None] | None = None,
     ) -> None:
         self._input = input_controller
         self._vision = vision
@@ -29,8 +31,10 @@ class WorkflowExecutor:
         self._runtime_event_callback = runtime_event_callback
         self._shared_variable_resolver = shared_variable_resolver
         self._shared_variable_state_setter = shared_variable_state_setter
+        self._call_workflow_handler = call_workflow_handler
         self._loop_lock = Lock()
         self._active_workflows: dict[str, Event] = {}
+        self._active_threads: dict[str, Thread] = {}
         self._loop_stops: dict[str, Event] = {}
         self._toggle_cooldown: dict[str, float] = {}
         self._toggle_cooldown_seconds = 0.5
@@ -58,13 +62,15 @@ class WorkflowExecutor:
         stop_event = Event()
         self._active_workflows[workflow.workflow_id] = stop_event
 
-        Thread(
+        thread = Thread(
             target=self._execute_thread,
             args=(workflow, settings, stop_event, run_mode),
             daemon=True,
-        ).start()
+        )
+        self._active_threads[workflow.workflow_id] = thread
+        thread.start()
 
-    def stop_workflow(self, workflow_id: str) -> bool:
+    def stop_workflow(self, workflow_id: str, timeout: float = 3.0) -> bool:
         stop_event = self._active_workflows.get(workflow_id)
         if stop_event is None:
             return False
@@ -78,6 +84,9 @@ class WorkflowExecutor:
             },
         )
         stop_event.set()
+        thread = self._active_threads.get(workflow_id)
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=timeout)
         return True
 
     def shutdown(self) -> None:
@@ -110,13 +119,16 @@ class WorkflowExecutor:
         self._active_workflows[workflow.workflow_id] = stop_event
         self._loop_stops[workflow.workflow_id] = stop_event
         try:
-            Thread(
+            thread = Thread(
                 target=self._execute_thread,
                 args=(workflow, workflow_settings, stop_event, run_mode),
                 daemon=True,
-            ).start()
+            )
+            self._active_threads[workflow.workflow_id] = thread
+            thread.start()
         except Exception as exc:
             self._active_workflows.pop(workflow.workflow_id, None)
+            self._active_threads.pop(workflow.workflow_id, None)
             self._loop_stops.pop(workflow.workflow_id, None)
             self._loop_lock.release()
             self._logger(f"循环线程启动失败：{workflow.name}，{exc}", "error")
@@ -210,6 +222,7 @@ class WorkflowExecutor:
             )
         finally:
             self._active_workflows.pop(workflow.workflow_id, None)
+            self._active_threads.pop(workflow.workflow_id, None)
             if is_loop:
                 self._loop_lock.release()
                 self._toggle_cooldown[workflow.workflow_id] = time.monotonic()
@@ -250,11 +263,22 @@ class WorkflowExecutor:
             "key_tap": lambda params: self._handle_key_tap(workflow_id, params, workflow_settings, stop_event),
             "key_sequence": lambda params: self._handle_key_sequence(workflow_id, params, workflow_settings, stop_event),
             "detect_image": lambda params: self._handle_detect_image(workflow_id, params, workflow_settings, context, stop_event),
-            "click_point": lambda params: self._handle_click_point(workflow_id, params, context),
+            "click_point": lambda params: self._handle_click_point(workflow_id, params, context, stop_event),
             "if_var_found": lambda params: self._handle_if_var_found(workflow_id, params, workflow_settings, context, stop_event),
+            "if_condition": lambda params: self._handle_if_condition(workflow_id, params, workflow_settings, context, stop_event),
             "set_variable_state": lambda params: self._handle_set_variable_state(workflow_id, params, context),
             "key_hold": lambda params: self._handle_key_hold(workflow_id, params, workflow_settings, context, stop_event),
             "detect_click_return": lambda params: self._handle_detect_click_return(workflow_id, params, workflow_settings, context, stop_event),
+            "mouse_scroll": lambda params: self._handle_mouse_scroll(workflow_id, params, stop_event),
+            "mouse_hold": lambda params: self._handle_mouse_hold(workflow_id, params, context, stop_event),
+            "detect_color": lambda params: self._handle_detect_color(workflow_id, params, context, stop_event),
+            "loop": lambda params: self._handle_loop(workflow_id, params, workflow_settings, context, stop_event),
+            "call_workflow": lambda params: self._handle_call_workflow(workflow_id, params, stop_event),
+            "log": lambda params: self._handle_log(workflow_id, params, context),
+            "mouse_drag": lambda params: self._handle_mouse_drag(workflow_id, params, context, stop_event),
+            "type_text": lambda params: self._handle_type_text(workflow_id, params, stop_event),
+            "mouse_move": lambda params: self._handle_mouse_move(workflow_id, params, context, stop_event),
+            "set_variable": lambda params: self._handle_set_variable(workflow_id, params, context),
         }
         handler = handlers.get(action.kind)
         if handler is None:
@@ -297,7 +321,13 @@ class WorkflowExecutor:
         workflow_settings: dict[str, Any],
         stop_event: Event | None,
     ) -> None:
-        self._wait_delay(self._resolve_delay_ms(params, workflow_settings), stop_event)
+        random_min = max(0, int(params.get("random_min", 0)))
+        random_max = max(0, int(params.get("random_max", 0)))
+        if random_min > 0 and random_max > random_min:
+            delay_ms = random.randint(random_min, random_max)
+        else:
+            delay_ms = self._resolve_delay_ms(params, workflow_settings)
+        self._wait_delay(delay_ms, stop_event)
 
     def _handle_key_tap(
         self,
@@ -417,16 +447,38 @@ class WorkflowExecutor:
             raise ValueError("识图动作缺少 template_path 参数")
 
         template_path = self._resolve_template_path(raw_template_path)
+        if not template_path.exists():
+            raise FileNotFoundError(f"模板图片不存在：{template_path}")
         confidence = float(params.get("confidence", 0.88))
-        timeout_ms = self._resolve_delay_ms(params, workflow_settings, field="timeout_ms") or 2500
+        raw_timeout = self._resolve_delay_ms(params, workflow_settings, field="timeout_ms")
+        if raw_timeout <= 0:
+            self._logger("timeout_ms 值无效，使用默认 2500ms", "warn")
+            raw_timeout = 2500
+        timeout_ms = raw_timeout
         search_step = max(1, int(params.get("search_step", 4)))
         save_as = str(params.get("save_as", "target")).strip() or "target"
+
+        raw_search_region = params.get("search_region")
+        search_region: dict[str, int] | None = None
+        if isinstance(raw_search_region, dict):
+            try:
+                search_region = {
+                    "left": int(raw_search_region.get("left", 0)),
+                    "top": int(raw_search_region.get("top", 0)),
+                    "width": int(raw_search_region.get("width", 0)),
+                    "height": int(raw_search_region.get("height", 0)),
+                }
+                if search_region["width"] <= 0 or search_region["height"] <= 0:
+                    search_region = None
+            except (TypeError, ValueError):
+                search_region = None
 
         match = self._vision.locate_on_screen_details(
             template_path=template_path,
             confidence=confidence,
             timeout_ms=timeout_ms,
             search_step=search_step,
+            search_region=search_region,
             stop_event=stop_event,
         )
         result = match or self._build_miss_match(template_path, confidence)
@@ -457,19 +509,23 @@ class WorkflowExecutor:
         workflow_id: str,
         params: dict[str, Any],
         context: dict[str, Any],
+        stop_event: Event | None = None,
     ) -> None:
+        if stop_event is not None and stop_event.is_set():
+            return
         source = str(params.get("source", "var")).strip()
         if source not in {"var", "absolute", "shared", "current"}:
             source = "var"
         button = "right" if str(params.get("button", "left")).strip() == "right" else "left"
         raw_modifiers = list(params.get("modifiers", []))
         modifiers = [m for m in raw_modifiers if m in {"ctrl", "shift", "alt"}]
+        click_count = max(1, int(params.get("click_count", 1)))
 
         settle_ms = max(0, int(params.get("settle_ms", 60)))
         modifier_delay_ms = max(0, int(params.get("modifier_delay_ms", 50)))
 
         if source == "current":
-            if modifiers:
+            if modifiers or click_count > 1:
                 current_pos = self._input.get_cursor_position()
                 self._input.click_at(
                     target_position=current_pos,
@@ -478,6 +534,7 @@ class WorkflowExecutor:
                     return_cursor=False,
                     modifiers=modifiers,
                     modifier_delay_ms=modifier_delay_ms,
+                    click_count=click_count,
                 )
             else:
                 self._input.click_here(button)
@@ -515,6 +572,7 @@ class WorkflowExecutor:
             return_cursor=return_cursor,
             modifiers=modifiers or None,
             modifier_delay_ms=modifier_delay_ms,
+            click_count=click_count,
         )
         self._emit_runtime_event(
             workflow_id,
@@ -567,6 +625,68 @@ class WorkflowExecutor:
         )
         self._execute_steps(workflow_id, branch_steps, workflow_settings, context, stop_event)
 
+    def _evaluate_condition(self, variable_scope: str, var_name: str, field: str, operator: str, value: str, context: dict[str, Any]) -> bool:
+        var_data = self._resolve_variable(variable_scope, var_name, context) or {}
+        actual = var_data.get(field)
+        if actual is None:
+            return operator == "=="  and value.lower() in ("", "none", "null")
+        try:
+            actual_num = float(actual)
+            value_num = float(value)
+            if operator == ">":
+                return actual_num > value_num
+            if operator == ">=":
+                return actual_num >= value_num
+            if operator == "<":
+                return actual_num < value_num
+            if operator == "<=":
+                return actual_num <= value_num
+            if operator == "==":
+                return actual_num == value_num
+            if operator == "!=":
+                return actual_num != value_num
+        except (TypeError, ValueError):
+            pass
+        actual_str = str(actual).strip().lower()
+        value_str = str(value).strip().lower()
+        if operator == "==":
+            return actual_str == value_str
+        if operator == "!=":
+            return actual_str != value_str
+        return False
+
+    def _handle_if_condition(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        workflow_settings: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None,
+    ) -> None:
+        var_name = str(params.get("var_name", "target")).strip() or "target"
+        variable_scope = str(params.get("variable_scope", "local")).strip()
+        if variable_scope not in {"local", "shared"}:
+            variable_scope = "local"
+        field = str(params.get("field", "found")).strip() or "found"
+        operator = str(params.get("operator", "==")).strip()
+        if operator not in {">", ">=", "<", "<=", "==", "!="}:
+            operator = "=="
+        value = str(params.get("value", "true")).strip()
+        result = self._evaluate_condition(variable_scope, var_name, field, operator, value, context)
+        branch_key = "then_steps" if result else "else_steps"
+        branch_steps = [self._coerce_action(item) for item in list(params.get(branch_key, []))]
+        self._emit_runtime_event(
+            workflow_id,
+            {
+                "type": "branch",
+                "var_name": var_name,
+                "condition": f"{var_name}.{field} {operator} {value}",
+                "result": result,
+                "message": f"条件 {var_name}.{field} {operator} {value} = {'true' if result else 'false'}，进入 {'then' if result else 'else'} 分支。",
+            },
+        )
+        self._execute_steps(workflow_id, branch_steps, workflow_settings, context, stop_event)
+
     def _handle_set_variable_state(
         self,
         workflow_id: str,
@@ -607,11 +727,15 @@ class WorkflowExecutor:
         key = str(params.get("key", "")).strip()
         if not key:
             raise ValueError("按住按键动作缺少 key 参数")
+        duration_ms = int(params.get("duration_ms", 0))
         child_steps = [self._coerce_action(item) for item in list(params.get("steps", []))]
         self._input.press_key(key)
         try:
             self._emit_runtime_event(workflow_id, {"type": "key_hold", "key": key, "action": "press"})
-            self._execute_steps(workflow_id, child_steps, workflow_settings, context, stop_event)
+            if duration_ms > 0 and not child_steps:
+                self._wait_delay(duration_ms, stop_event)
+            else:
+                self._execute_steps(workflow_id, child_steps, workflow_settings, context, stop_event)
         finally:
             self._input.release_key(key)
             self._emit_runtime_event(workflow_id, {"type": "key_hold", "key": key, "action": "release"})
@@ -645,4 +769,320 @@ class WorkflowExecutor:
                 "settle_ms": params.get("settle_ms", 60),
             },
             context,
+            stop_event,
+        )
+
+    def _handle_mouse_scroll(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        stop_event: Event | None = None,
+    ) -> None:
+        if stop_event is not None and stop_event.is_set():
+            return
+        direction = str(params.get("direction", "down")).strip()
+        if direction not in {"up", "down", "left", "right"}:
+            direction = "down"
+        clicks = max(1, int(params.get("clicks", 3)))
+        self._input.scroll(clicks=clicks, direction=direction)
+        self._emit_runtime_event(
+            workflow_id,
+            {
+                "type": "scroll",
+                "direction": direction,
+                "clicks": clicks,
+            },
+        )
+
+    def _handle_mouse_hold(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None = None,
+    ) -> None:
+        if stop_event is not None and stop_event.is_set():
+            return
+        button = str(params.get("button", "left")).strip()
+        if button not in {"left", "right", "middle"}:
+            button = "left"
+        duration_ms = max(0, int(params.get("duration_ms", 500)))
+
+        source = str(params.get("source", "current")).strip()
+        if source not in {"current", "var", "shared", "absolute"}:
+            source = "current"
+
+        if source == "absolute":
+            x = int(params.get("x", 0))
+            y = int(params.get("y", 0))
+            self._input.set_cursor_position((x, y))
+            time.sleep(max(0, int(params.get("settle_ms", 60))) / 1000)
+        elif source in {"var", "shared"}:
+            var_name = str(params.get("var_name", "target")).strip() or "target"
+            point = self._resolve_variable("shared" if source == "shared" else "local", var_name, context)
+            if not point or not point.get("found"):
+                raise RuntimeError(f"变量 {var_name} 中没有可点击坐标")
+            x = int(point.get("x", 0)) + int(params.get("offset_x", 0))
+            y = int(point.get("y", 0)) + int(params.get("offset_y", 0))
+            self._input.set_cursor_position((x, y))
+            time.sleep(max(0, int(params.get("settle_ms", 60))) / 1000)
+
+        self._input.mouse_down(button)
+        self._emit_runtime_event(workflow_id, {"type": "mouse_hold", "button": button, "action": "down"})
+        try:
+            self._wait_delay(duration_ms, stop_event)
+        finally:
+            self._input.mouse_up(button)
+            self._emit_runtime_event(workflow_id, {"type": "mouse_hold", "button": button, "action": "up"})
+
+    def _handle_detect_color(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None = None,
+    ) -> None:
+        if stop_event is not None and stop_event.is_set():
+            return
+
+        source = str(params.get("source", "absolute")).strip()
+        if source not in {"absolute", "var", "shared"}:
+            source = "absolute"
+
+        if source == "absolute":
+            x = int(params.get("x", 0))
+            y = int(params.get("y", 0))
+        else:
+            var_name = str(params.get("var_name", "target")).strip() or "target"
+            point = self._resolve_variable("shared" if source == "shared" else "local", var_name, context)
+            if not point or not point.get("found"):
+                raise RuntimeError(f"变量 {var_name} 中没有坐标")
+            x = int(point.get("x", 0)) + int(params.get("offset_x", 0))
+            y = int(point.get("y", 0)) + int(params.get("offset_y", 0))
+
+        frame = self._vision.get_latest_frame()
+        if frame is None:
+            raise RuntimeError("无法获取屏幕截图")
+
+        h, w = frame.shape[:2]
+        if not (0 <= x < w and 0 <= y < h):
+            raise RuntimeError(f"坐标 ({x}, {y}) 超出屏幕范围 ({w}x{h})")
+
+        b, g, r = int(frame[y, x, 0]), int(frame[y, x, 1]), int(frame[y, x, 2])
+        hex_color = f"#{r:02X}{g:02X}{b:02X}"
+
+        save_as = str(params.get("save_as", "color_result")).strip() or "color_result"
+        expected_color = str(params.get("expected_color", "")).strip().upper()
+        tolerance = max(0, int(params.get("tolerance", 20)))
+
+        matched = False
+        if expected_color:
+            ec = expected_color.lstrip("#")
+            if len(ec) == 6:
+                er, eg, eb = int(ec[0:2], 16), int(ec[2:4], 16), int(ec[4:6], 16)
+                matched = abs(r - er) <= tolerance and abs(g - eg) <= tolerance and abs(b - eb) <= tolerance
+
+        payload = {
+            "found": matched,
+            "x": x,
+            "y": y,
+            "color": hex_color,
+            "r": r,
+            "g": g,
+            "b": b,
+            "expected_color": expected_color,
+            "tolerance": tolerance,
+        }
+        self._set_local_var(context, save_as, payload)
+        self._emit_runtime_event(
+            workflow_id,
+            {
+                "type": "detect_color",
+                "x": x,
+                "y": y,
+                "color": hex_color,
+                "matched": matched,
+                "save_as": save_as,
+            },
+        )
+
+    def _handle_loop(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        workflow_settings: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None = None,
+    ) -> None:
+        loop_type = str(params.get("loop_type", "count")).strip()
+        max_iterations = max(1, int(params.get("max_iterations", 10)))
+        child_steps = [self._coerce_action(item) for item in list(params.get("steps", []))]
+
+        if loop_type == "count":
+            for i in range(max_iterations):
+                if stop_event is not None and stop_event.is_set():
+                    return
+                self._emit_runtime_event(workflow_id, {"type": "loop", "iteration": i + 1, "max": max_iterations})
+                self._execute_steps(workflow_id, child_steps, workflow_settings, context, stop_event)
+        else:
+            var_name = str(params.get("var_name", "target")).strip() or "target"
+            variable_scope = str(params.get("variable_scope", "local")).strip()
+            if variable_scope not in {"local", "shared"}:
+                variable_scope = "local"
+            expect_found = loop_type == "while_found"
+            for i in range(max_iterations):
+                if stop_event is not None and stop_event.is_set():
+                    return
+                val = self._resolve_variable(variable_scope, var_name, context) or {}
+                if bool(val.get("found")) != expect_found:
+                    break
+                self._emit_runtime_event(workflow_id, {"type": "loop", "iteration": i + 1, "var_name": var_name, "found": val.get("found")})
+                self._execute_steps(workflow_id, child_steps, workflow_settings, context, stop_event)
+
+    def _handle_call_workflow(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        stop_event: Event | None = None,
+    ) -> None:
+        if stop_event is not None and stop_event.is_set():
+            return
+        target_id = str(params.get("target_workflow_id", "")).strip()
+        if not target_id:
+            raise ValueError("子流程调用缺少 target_workflow_id")
+        if self._call_workflow_handler is None:
+            raise RuntimeError("当前版本不支持子流程调用")
+        self._emit_runtime_event(workflow_id, {"type": "call_workflow", "target": target_id})
+        self._call_workflow_handler(target_id, stop_event)
+
+    def _handle_log(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        context: dict[str, Any],
+    ) -> None:
+        message = str(params.get("message", "")).strip()
+        level = str(params.get("level", "info")).strip()
+        if level not in {"info", "warn", "success"}:
+            level = "info"
+        # 简单变量插值: {var_name.field}
+        import re
+        def _replace_var(m: re.Match) -> str:
+            parts = m.group(1).split(".", 1)
+            var_name = parts[0].strip()
+            field = parts[1].strip() if len(parts) > 1 else "found"
+            val = self._resolve_variable("local", var_name, context) or {}
+            return str(val.get(field, ""))
+        resolved = re.sub(r"\{([^}]+)\}", _replace_var, message)
+        self._logger(f"[LOG] {resolved}", level)
+        self._emit_runtime_event(workflow_id, {"type": "log", "message": resolved, "level": level})
+
+    def _handle_mouse_drag(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None,
+    ) -> None:
+        if stop_event is not None and stop_event.is_set():
+            return
+        source = str(params.get("source", "absolute")).strip()
+        if source not in {"absolute", "var", "shared"}:
+            source = "absolute"
+        if source == "absolute":
+            start_x = int(params.get("start_x", 0))
+            start_y = int(params.get("start_y", 0))
+            end_x = int(params.get("end_x", 0))
+            end_y = int(params.get("end_y", 0))
+        else:
+            var_name = str(params.get("var_name", "target")).strip() or "target"
+            var_data = self._resolve_variable(source, var_name, context) or {}
+            base_x = int(var_data.get("x", 0))
+            base_y = int(var_data.get("y", 0))
+            start_x = base_x + int(params.get("start_offset_x", 0))
+            start_y = base_y + int(params.get("start_offset_y", 0))
+            end_x = base_x + int(params.get("end_offset_x", 0))
+            end_y = base_y + int(params.get("end_offset_y", 0))
+        button = str(params.get("button", "left")).strip()
+        if button not in {"left", "right", "middle"}:
+            button = "left"
+        duration_ms = max(0, int(params.get("duration_ms", 300)))
+        self._emit_runtime_event(
+            workflow_id,
+            {"type": "mouse_drag", "start": [start_x, start_y], "end": [end_x, end_y], "button": button},
+        )
+        self._input.drag(
+            start=(start_x, start_y),
+            end=(end_x, end_y),
+            button=button,
+            duration_ms=duration_ms,
+        )
+
+    def _handle_type_text(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        stop_event: Event | None,
+    ) -> None:
+        if stop_event is not None and stop_event.is_set():
+            return
+        text = str(params.get("text", ""))
+        interval_ms = max(0, int(params.get("interval_ms", 50)))
+        self._emit_runtime_event(
+            workflow_id,
+            {"type": "type_text", "length": len(text)},
+        )
+        self._input.type_text(text, interval_ms=interval_ms)
+
+    def _handle_mouse_move(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None,
+    ) -> None:
+        if stop_event is not None and stop_event.is_set():
+            return
+        source = str(params.get("source", "absolute")).strip()
+        if source not in {"absolute", "var", "shared"}:
+            source = "absolute"
+        if source == "absolute":
+            x = int(params.get("x", 0))
+            y = int(params.get("y", 0))
+        else:
+            var_name = str(params.get("var_name", "target")).strip() or "target"
+            var_data = self._resolve_variable(source, var_name, context) or {}
+            x = int(var_data.get("x", 0)) + int(params.get("offset_x", 0))
+            y = int(var_data.get("y", 0)) + int(params.get("offset_y", 0))
+        self._emit_runtime_event(workflow_id, {"type": "mouse_move", "x": x, "y": y})
+        self._input.set_cursor_position((x, y))
+
+    def _handle_set_variable(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        context: dict[str, Any],
+    ) -> None:
+        var_name = str(params.get("var_name", "target")).strip() or "target"
+        field = str(params.get("field", "found")).strip() or "found"
+        value = str(params.get("value", ""))
+        # 自动类型转换
+        if value.lower() == "true":
+            typed_value: Any = True
+        elif value.lower() == "false":
+            typed_value = False
+        else:
+            try:
+                typed_value = int(value)
+            except ValueError:
+                try:
+                    typed_value = float(value)
+                except ValueError:
+                    typed_value = value
+        variables = context.setdefault("variables", {})
+        var_data = variables.setdefault(var_name, {})
+        var_data[field] = typed_value
+        self._emit_runtime_event(
+            workflow_id,
+            {"type": "set_variable", "var_name": var_name, "field": field, "value": typed_value},
         )

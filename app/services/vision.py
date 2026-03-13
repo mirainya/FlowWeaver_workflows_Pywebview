@@ -1,5 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import logging
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +16,9 @@ try:
 except ModuleNotFoundError:
     cv2 = None
 
+_logger = logging.getLogger(__name__)
+_IS_WINDOWS = sys.platform == "win32"
+
 
 @dataclass(slots=True)
 class LoadedTemplate:
@@ -27,25 +32,33 @@ class LoadedTemplate:
 class SharedScreenCapture:
     """独立线程持续截屏，所有消费者共享最新帧，避免跨线程 GDI 调用导致屏幕闪烁。"""
 
+    _MIN_FPS = 5
+    _MAX_FPS = 30
+    _DEFAULT_FPS = 15
+
     def __init__(self, monitor_index: int = 1) -> None:
         self._monitor_index = monitor_index
         self._lock = Lock()
         self._frame: np.ndarray | None = None
         self._frame_time: float = 0.0
         self._last_demand: float = 0.0
+        self._target_fps: float = self._DEFAULT_FPS
         self._stop = Event()
         self._ready = Event()
         self._thread = Thread(target=self._capture_loop, daemon=True)
         self._thread.start()
 
+    def set_target_fps(self, fps: float) -> None:
+        self._target_fps = max(self._MIN_FPS, min(self._MAX_FPS, fps))
+
     def _capture_loop(self) -> None:
         sct = mss()
-        interval = 1.0 / 30  # 30 fps
         try:
             while not self._stop.is_set():
                 if time.monotonic() - self._last_demand > 2.0:
                     self._stop.wait(0.2)
                     continue
+                interval = 1.0 / self._target_fps
                 start = time.monotonic()
                 try:
                     monitor_count = len(sct.monitors)
@@ -56,8 +69,8 @@ class SharedScreenCapture:
                         self._frame = frame
                         self._frame_time = time.monotonic()
                     self._ready.set()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _logger.warning("截屏失败: %s", exc)
                 elapsed = time.monotonic() - start
                 remaining = max(0.0, interval - elapsed)
                 if remaining > 0:
@@ -97,6 +110,13 @@ class TemplateMatcher:
                 self._screen_capture.close()
             except Exception:
                 pass
+
+    def get_latest_frame(self) -> np.ndarray | None:
+        """获取最新一帧屏幕截图（BGR格式），供取色等功能使用。"""
+        try:
+            return self._capture_primary_screen()
+        except Exception:
+            return None
 
     def locate_on_screen(
         self,
@@ -198,10 +218,17 @@ class TemplateMatcher:
         screen_bgra = np.array(raw_screen, dtype=np.uint8)
         return np.ascontiguousarray(screen_bgra[:, :, :3])
 
+    def _normalize_cache_key(self, path: Path) -> str:
+        resolved = str(path.resolve())
+        return resolved.lower() if _IS_WINDOWS else resolved
+
     def _load_template(self, template_path: Path) -> LoadedTemplate:
-        resolved_path = str(template_path.resolve())
+        cache_key = self._normalize_cache_key(template_path)
+        cached_template = self._template_cache.get(cache_key)
+        # 有缓存时跳过 stat()，通过 mtime_ns=-1 标记强制刷新
+        if cached_template is not None and cached_template.mtime_ns >= 0:
+            return cached_template
         template_mtime = template_path.stat().st_mtime_ns
-        cached_template = self._template_cache.get(resolved_path)
         if cached_template is not None and cached_template.mtime_ns == template_mtime:
             return cached_template
 
@@ -236,8 +263,19 @@ class TemplateMatcher:
             height=int(template_height),
             mtime_ns=int(template_mtime),
         )
-        self._template_cache[resolved_path] = loaded_template
+        self._template_cache[cache_key] = loaded_template
         return loaded_template
+
+    def invalidate_template_cache(self) -> None:
+        """将所有缓存标记为需要重新检查 mtime（下次 _load_template 时触发 stat）。"""
+        for key, cached in self._template_cache.items():
+            self._template_cache[key] = LoadedTemplate(
+                image=cached.image,
+                mask=cached.mask,
+                width=cached.width,
+                height=cached.height,
+                mtime_ns=-1,
+            )
 
     def _prepare_screen(self, screen_image: np.ndarray) -> np.ndarray:
         return cv2.cvtColor(screen_image, cv2.COLOR_BGR2GRAY)

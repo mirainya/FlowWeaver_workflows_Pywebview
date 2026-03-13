@@ -396,9 +396,11 @@ class AsyncVisionManager:
         project_root: Path,
         logger: Callable[[str, str], None],
         shared_capture: SharedScreenCapture | None = None,
+        max_threads: int = 8,
     ) -> None:
         self._project_root = project_root
         self._logger = logger
+        self._max_threads = max(1, max_threads)
         self._lock = Lock()
         self._stop_all = Event()
         self._store = SharedVariableStore()
@@ -542,6 +544,13 @@ class AsyncVisionManager:
     def _start_monitor(self, monitor: dict[str, Any]) -> None:
         monitor_id = str(monitor["monitor_id"])
         self._stop_monitor(monitor_id)
+        with self._lock:
+            active_count = sum(1 for t in self._threads.values() if t.is_alive())
+        if active_count >= self._max_threads:
+            name = monitor.get("name", monitor_id)
+            self._logger(f"监控线程已达上限({self._max_threads})，无法启动 {name}。", "warning")
+            self._set_status(monitor, "error", f"线程数已达上限({self._max_threads})")
+            return
         stop_event = Event()
         worker = Thread(target=self._monitor_loop, args=(monitor_id, stop_event), daemon=True)
         with self._lock:
@@ -549,6 +558,7 @@ class AsyncVisionManager:
             self._threads[monitor_id] = worker
         worker.start()
         self._set_status(monitor, "running", "监控已启动。")
+        self._update_capture_fps()
 
     def _stop_monitor(self, monitor_id: str) -> None:
         with self._lock:
@@ -557,7 +567,23 @@ class AsyncVisionManager:
         if stop_event is not None:
             stop_event.set()
         if worker is not None and worker.is_alive():
-            worker.join(timeout=0.8)
+            worker.join(timeout=1.5)
+        self._update_capture_fps()
+
+    def _update_capture_fps(self) -> None:
+        if self._shared_capture is None:
+            return
+        with self._lock:
+            active_monitors = [
+                m for mid, m in self._monitors.items()
+                if m.get("enabled") and mid in self._stops
+            ]
+        if not active_monitors:
+            self._shared_capture.set_target_fps(SharedScreenCapture._MIN_FPS)
+            return
+        min_interval = min(_effective_interval_ms(m) for m in active_monitors)
+        needed_fps = 1000.0 / max(min_interval, 30)
+        self._shared_capture.set_target_fps(needed_fps)
 
     def _set_status(
         self,
@@ -613,11 +639,24 @@ class AsyncVisionManager:
 
     def _monitor_loop(self, monitor_id: str, stop_event: Event) -> None:
         matcher = TemplateMatcher(shared_capture=self._shared_capture)
+        consecutive_errors = 0
+        max_consecutive_errors = 10
         try:
             while not self._stop_all.is_set() and not stop_event.is_set():
                 with self._lock:
-                    monitor = deepcopy(self._monitors.get(monitor_id))
-                    runtime = deepcopy(self._statuses.get(monitor_id, {}))
+                    monitor = self._monitors.get(monitor_id)
+                    if not monitor or not monitor.get("enabled"):
+                        break
+                    # 浅拷贝 monitor 配置（dict 内无嵌套可变结构需要保护）
+                    monitor = dict(monitor)
+                    # fixed_region 是嵌套 dict，需要单独拷贝
+                    fr = monitor.get("fixed_region")
+                    if isinstance(fr, dict):
+                        monitor["fixed_region"] = dict(fr)
+                    runtime = dict(self._statuses.get(monitor_id, {}))
+                    sr = runtime.get("search_region")
+                    if isinstance(sr, dict):
+                        runtime["search_region"] = dict(sr)
                 if not monitor or not monitor.get("enabled"):
                     break
 
@@ -628,8 +667,10 @@ class AsyncVisionManager:
                 last_hit_at = runtime.get("last_hit_at")
 
                 if not str(monitor.get("template_path", "")).strip():
+                    consecutive_errors += 1
                     self._set_status(monitor, "error", "缺少模板图片。", active_scope=active_scope, search_region=search_region, miss_count=miss_count, last_hit_at=last_hit_at)
                 elif not template_path.exists():
+                    consecutive_errors += 1
                     self._set_status(monitor, "error", f"模板图片不存在：{template_path.name}", active_scope=active_scope, search_region=search_region, miss_count=miss_count, last_hit_at=last_hit_at)
                 else:
                     try:
@@ -640,8 +681,11 @@ class AsyncVisionManager:
                             search_step=4,
                             search_region=search_region,
                             capture_once=True,
+                            stop_event=stop_event,
                         )
+                        consecutive_errors = 0
                     except Exception as exc:
+                        consecutive_errors += 1
                         message = f"异步识图失败：{monitor.get('name')} · {exc}"
                         self._logger(message, "error")
                         self._set_status(monitor, "error", message, active_scope=active_scope, search_region=search_region, miss_count=miss_count, last_hit_at=last_hit_at)
@@ -701,6 +745,13 @@ class AsyncVisionManager:
                 elapsed_ms = int((time.monotonic() - cycle_started) * 1000)
                 interval_ms = _effective_interval_ms(monitor)
                 wait_ms = max(0, interval_ms - elapsed_ms)
+                if consecutive_errors >= max_consecutive_errors:
+                    self._logger(
+                        f"监控 {monitor.get('name')} 连续 {consecutive_errors} 次错误，已自动暂停。",
+                        "error",
+                    )
+                    self._set_status(monitor, "error", f"连续 {consecutive_errors} 次错误，已自动暂停。")
+                    break
                 if stop_event.wait(wait_ms / 1000):
                     break
         finally:

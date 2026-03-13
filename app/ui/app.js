@@ -1,13 +1,38 @@
-﻿const STEP_TYPES = [
-  { key: 'key_tap', label: '按键触发' },
-  { key: 'delay', label: '延时等待' },
-  { key: 'key_sequence', label: '按键序列' },
-  { key: 'detect_image', label: '识图存变量' },
-  { key: 'click_point', label: '点击坐标' },
-  { key: 'if_var_found', label: '识图分支' },
-  { key: 'set_variable_state', label: '变量赋值' },
-  { key: 'key_hold', label: '按住按键' },
+﻿const STEP_TYPE_GROUPS = [
+  { group: '键盘', items: [
+    { key: 'key_tap', label: '按一下键' },
+    { key: 'key_sequence', label: '连续按键' },
+    { key: 'key_hold', label: '按住不放' },
+  ]},
+  { group: '鼠标', items: [
+    { key: 'click_point', label: '点击' },
+    { key: 'mouse_move', label: '移动鼠标' },
+    { key: 'mouse_drag', label: '拖拽' },
+    { key: 'mouse_scroll', label: '滚轮' },
+    { key: 'mouse_hold', label: '长按鼠标' },
+  ]},
+  { group: '找图找色', items: [
+    { key: 'detect_image', label: '截图找图' },
+    { key: 'detect_color', label: '取像素颜色' },
+  ]},
+  { group: '判断与循环', items: [
+    { key: 'if_var_found', label: '找图结果判断' },
+    { key: 'if_condition', label: '条件判断' },
+    { key: 'loop', label: '循环执行' },
+  ]},
+  { group: '数据操作', items: [
+    { key: 'set_variable_state', label: '改找图状态' },
+    { key: 'set_variable', label: '设置数据值' },
+    { key: 'type_text', label: '打字输入' },
+  ]},
+  { group: '流程控制', items: [
+    { key: 'call_workflow', label: '调用其他流程' },
+    { key: 'delay', label: '等一会儿' },
+    { key: 'log', label: '输出日志' },
+  ]},
 ];
+
+const STEP_TYPES = STEP_TYPE_GROUPS.flatMap((g) => g.items);
 
 const DEFAULT_DESIGNER_TEMPLATE = {
   run_mode: { type: 'once' },
@@ -28,14 +53,9 @@ const APP_TABS = [
     count: () => state.workflows.length,
   },
   {
-    key: 'editor',
-    label: '流程编辑',
-    description: '单独编辑流程的热键、运行模式和步骤。',
-  },
-  {
     key: 'async_vision',
-    label: '异步识图',
-    description: '后台持续识图，并把结果写入共享变量。',
+    label: '后台识图',
+    description: '后台持续识图，并把结果写入共享数据。',
     count: () => state.asyncVision.monitors.length,
   },
   {
@@ -126,6 +146,8 @@ const state = {
   architecture: [],
   flowQuery: '',
   flowFilter: 'all',
+  flowViewMode: 'card',
+  flowSort: 'name',
   theme: INITIAL_THEME,
   runtime: {
     workflow_states: {},
@@ -151,6 +173,7 @@ const state = {
   },
   bootstrapped: false,
   timersStarted: false,
+  collapsedSteps: new Set(),
   captureSuspended: false,
   captureReleaseTimer: null,
   toastTimer: null,
@@ -690,7 +713,7 @@ function stepTypeLabel(kind) {
 
 function createDefaultStep(kind = 'key_tap') {
   if (kind === 'delay') {
-    return { kind: 'delay', milliseconds: 100 };
+    return { kind: 'delay', milliseconds: 100, random_min: 0, random_max: 0 };
   }
   if (kind === 'key_sequence') {
     return {
@@ -747,8 +770,42 @@ function createDefaultStep(kind = 'key_tap') {
     return {
       kind: 'key_hold',
       key: '',
+      duration_ms: 0,
       steps: [createDefaultStep('delay')],
     };
+  }
+  if (kind === 'mouse_scroll') {
+    return { kind: 'mouse_scroll', direction: 'down', clicks: 3 };
+  }
+  if (kind === 'mouse_hold') {
+    return { kind: 'mouse_hold', button: 'left', duration_ms: 500, source: 'current', var_name: 'target', x: 0, y: 0, offset_x: 0, offset_y: 0, settle_ms: 60 };
+  }
+  if (kind === 'detect_color') {
+    return { kind: 'detect_color', source: 'absolute', x: 0, y: 0, var_name: 'target', offset_x: 0, offset_y: 0, expected_color: '', tolerance: 20, save_as: 'color_result' };
+  }
+  if (kind === 'loop') {
+    return { kind: 'loop', loop_type: 'count', max_iterations: 10, var_name: 'target', variable_scope: 'local', steps: [createDefaultStep('delay')] };
+  }
+  if (kind === 'call_workflow') {
+    return { kind: 'call_workflow', target_workflow_id: '' };
+  }
+  if (kind === 'if_condition') {
+    return { kind: 'if_condition', var_name: 'target', variable_scope: 'local', field: 'found', operator: '==', value: 'true', then_steps: [createDefaultStep('key_tap')], else_steps: [] };
+  }
+  if (kind === 'log') {
+    return { kind: 'log', message: '', level: 'info' };
+  }
+  if (kind === 'mouse_drag') {
+    return { kind: 'mouse_drag', source: 'absolute', start_x: 0, start_y: 0, end_x: 0, end_y: 0, button: 'left', duration_ms: 300, var_name: 'target', start_offset_x: 0, start_offset_y: 0, end_offset_x: 0, end_offset_y: 0 };
+  }
+  if (kind === 'type_text') {
+    return { kind: 'type_text', text: '', interval_ms: 50 };
+  }
+  if (kind === 'mouse_move') {
+    return { kind: 'mouse_move', source: 'absolute', x: 0, y: 0, var_name: 'target', offset_x: 0, offset_y: 0 };
+  }
+  if (kind === 'set_variable') {
+    return { kind: 'set_variable', var_name: 'target', field: 'found', value: 'true' };
   }
   return {
     kind: 'key_tap',
@@ -784,6 +841,8 @@ function normalizeStep(rawStep) {
     return {
       kind: 'delay',
       milliseconds: Math.max(0, normalizeInt(step.milliseconds ?? step.delay_ms, 100)),
+      random_min: Math.max(0, normalizeInt(step.random_min, 0)),
+      random_max: Math.max(0, normalizeInt(step.random_max, 0)),
     };
   }
 
@@ -828,6 +887,7 @@ function normalizeStep(rawStep) {
       return_cursor: Boolean(step.return_cursor ?? true),
       settle_ms: Math.max(0, normalizeInt(step.settle_ms, 60)),
       modifier_delay_ms: Math.max(0, normalizeInt(step.modifier_delay_ms, 50)),
+      click_count: Math.max(1, Math.min(5, normalizeInt(step.click_count, 1))),
       modifiers,
     };
   }
@@ -855,14 +915,137 @@ function normalizeStep(rawStep) {
     return {
       kind: 'key_hold',
       key: String(step.key ?? '').trim(),
+      duration_ms: Math.max(0, normalizeInt(step.duration_ms, 0)),
       steps: normalizeSteps(step.steps, false),
+    };
+  }
+
+  if (kind === 'mouse_scroll') {
+    const direction = ['up', 'down', 'left', 'right'].includes(step.direction) ? step.direction : 'down';
+    return {
+      kind: 'mouse_scroll',
+      direction,
+      clicks: Math.max(1, Math.min(100, normalizeInt(step.clicks, 3))),
+    };
+  }
+
+  if (kind === 'mouse_hold') {
+    const button = ['left', 'right', 'middle'].includes(step.button) ? step.button : 'left';
+    const source = ['current', 'var', 'shared', 'absolute'].includes(step.source) ? step.source : 'current';
+    return {
+      kind: 'mouse_hold',
+      button,
+      duration_ms: Math.max(0, normalizeInt(step.duration_ms, 500)),
+      source,
+      var_name: String(step.var_name ?? 'target').trim() || 'target',
+      x: normalizeInt(step.x, 0),
+      y: normalizeInt(step.y, 0),
+      offset_x: normalizeInt(step.offset_x, 0),
+      offset_y: normalizeInt(step.offset_y, 0),
+      settle_ms: Math.max(0, normalizeInt(step.settle_ms, 60)),
+    };
+  }
+
+  if (kind === 'detect_color') {
+    const source = ['absolute', 'var', 'shared'].includes(step.source) ? step.source : 'absolute';
+    return {
+      kind: 'detect_color',
+      source,
+      x: normalizeInt(step.x, 0),
+      y: normalizeInt(step.y, 0),
+      var_name: String(step.var_name ?? 'target').trim() || 'target',
+      offset_x: normalizeInt(step.offset_x, 0),
+      offset_y: normalizeInt(step.offset_y, 0),
+      expected_color: String(step.expected_color ?? '').trim(),
+      tolerance: Math.max(0, Math.min(255, normalizeInt(step.tolerance, 20))),
+      save_as: String(step.save_as ?? 'color_result').trim() || 'color_result',
+    };
+  }
+
+  if (kind === 'loop') {
+    const loop_type = ['count', 'while_found', 'while_not_found'].includes(step.loop_type) ? step.loop_type : 'count';
+    const variable_scope = ['local', 'shared'].includes(step.variable_scope) ? step.variable_scope : 'local';
+    return {
+      kind: 'loop',
+      loop_type,
+      max_iterations: Math.max(1, Math.min(99999, normalizeInt(step.max_iterations, 10))),
+      var_name: String(step.var_name ?? 'target').trim() || 'target',
+      variable_scope,
+      steps: normalizeSteps(step.steps, false),
+    };
+  }
+
+  if (kind === 'call_workflow') {
+    return {
+      kind: 'call_workflow',
+      target_workflow_id: String(step.target_workflow_id ?? '').trim(),
+    };
+  }
+
+  if (kind === 'if_condition') {
+    const variable_scope = ['local', 'shared'].includes(step.variable_scope) ? step.variable_scope : 'local';
+    const operator = ['>', '>=', '<', '<=', '==', '!='].includes(step.operator) ? step.operator : '==';
+    return {
+      kind: 'if_condition',
+      var_name: String(step.var_name ?? 'target').trim() || 'target',
+      variable_scope,
+      field: String(step.field ?? 'found').trim() || 'found',
+      operator,
+      value: String(step.value ?? 'true').trim(),
+      then_steps: normalizeSteps(step.then_steps, false),
+      else_steps: normalizeSteps(step.else_steps, true),
+    };
+  }
+
+  if (kind === 'log') {
+    const level = ['info', 'warn', 'success'].includes(step.level) ? step.level : 'info';
+    return {
+      kind: 'log',
+      message: String(step.message ?? '').trim(),
+      level,
+    };
+  }
+
+  if (kind === 'mouse_drag') {
+    const source = ['absolute', 'var', 'shared'].includes(step.source) ? step.source : 'absolute';
+    const button = ['left', 'right', 'middle'].includes(step.button) ? step.button : 'left';
+    const base = { kind: 'mouse_drag', source, button, duration_ms: clampInt(step.duration_ms, 300, 0, 60000) };
+    if (source === 'absolute') {
+      return { ...base, start_x: clampInt(step.start_x, 0), start_y: clampInt(step.start_y, 0), end_x: clampInt(step.end_x, 0), end_y: clampInt(step.end_y, 0) };
+    }
+    return { ...base, var_name: String(step.var_name ?? 'target').trim() || 'target', start_offset_x: clampInt(step.start_offset_x, 0), start_offset_y: clampInt(step.start_offset_y, 0), end_offset_x: clampInt(step.end_offset_x, 0), end_offset_y: clampInt(step.end_offset_y, 0) };
+  }
+
+  if (kind === 'type_text') {
+    return {
+      kind: 'type_text',
+      text: String(step.text ?? ''),
+      interval_ms: clampInt(step.interval_ms, 50, 0, 5000),
+    };
+  }
+
+  if (kind === 'mouse_move') {
+    const source = ['absolute', 'var', 'shared'].includes(step.source) ? step.source : 'absolute';
+    const base = { kind: 'mouse_move', source };
+    if (source === 'absolute') {
+      return { ...base, x: clampInt(step.x, 0), y: clampInt(step.y, 0) };
+    }
+    return { ...base, var_name: String(step.var_name ?? 'target').trim() || 'target', offset_x: clampInt(step.offset_x, 0), offset_y: clampInt(step.offset_y, 0) };
+  }
+
+  if (kind === 'set_variable') {
+    return {
+      kind: 'set_variable',
+      var_name: String(step.var_name ?? 'target').trim() || 'target',
+      field: String(step.field ?? 'found').trim() || 'found',
+      value: String(step.value ?? ''),
     };
   }
 
   return {
     kind: 'key_tap',
     keys: String(step.keys ?? '').trim(),
-    delay_ms_after: Math.max(0, normalizeInt(step.delay_ms_after ?? step.delay_ms, 100)),
+    delay_ms_after: Math.max(0, normalizeInt(step.delay_ms_after, 100)),
   };
 }
 
@@ -1207,7 +1390,7 @@ function resetDesigner(keepTab = true) {
   state.designer = createEmptyDesigner();
   resetDesignerSaveState();
   if (!keepTab) {
-    state.activeTab = 'editor';
+    state.activeTab = 'flows';
   }
   renderHero();
   renderTabs();
@@ -1233,8 +1416,11 @@ function loadWorkflowIntoDesigner(workflowId) {
     return;
   }
   state.designer = workflowToDesigner(workflow);
+  state.collapsedSteps = new Set(
+    state.designer.steps.map((_, i) => i)
+  );
   resetDesignerSaveState();
-  state.activeTab = 'editor';
+  state.activeTab = 'flows';
   renderHero();
   renderTabs();
   renderDesigner();
@@ -1309,6 +1495,26 @@ function changeDesignerStepKind(stepPath, kind) {
     return;
   }
   parent[key] = createDefaultStep(kind);
+  markDesignerDirty();
+  renderDesignerSteps();
+}
+
+function toggleStepCollapse(stepPath) {
+  if (state.collapsedSteps.has(stepPath)) {
+    state.collapsedSteps.delete(stepPath);
+  } else {
+    state.collapsedSteps.add(stepPath);
+  }
+  renderDesignerSteps();
+}
+
+function duplicateDesignerStep(stepPath) {
+  const { parent, key } = getParentAndKey(stepPath);
+  if (!Array.isArray(parent)) {
+    return;
+  }
+  const clone = deepClone(parent[key]);
+  parent.splice(Number(key) + 1, 0, clone);
   markDesignerDirty();
   renderDesignerSteps();
 }
@@ -1399,7 +1605,6 @@ function updateSequenceItem(stepPath, index, field, value, valueType = 'text') {
 function renderSummary() {
   document.getElementById('workflow-count').textContent = state.summary.workflow_count ?? 0;
   document.getElementById('enabled-count').textContent = state.summary.enabled_count ?? 0;
-  document.getElementById('custom-flow-count').textContent = state.summary.custom_flow_count ?? 0;
   document.getElementById('visual-count').textContent = state.summary.visual_count ?? 0;
   document.getElementById('loop-count').textContent = state.summary.loop_count ?? 0;
   document.getElementById('active-loop-count').textContent = state.summary.active_loop_count ?? 0;
@@ -1475,7 +1680,7 @@ function renderTabs() {
     <span>${({
       flows: '在这里查看流程列表、搜索过滤，并进入流程编辑。',
       editor: '流程编辑器独立显示，保存状态会直接反馈在页头。',
-      async_vision: '当前页支持新建、编辑、删除异步识图，并查看共享变量。',
+      async_vision: '当前页支持新建、编辑、删除后台识图，并查看共享数据。',
       settings: '主题切换会立即生效，并保存在当前电脑。',
       about: '说明信息统一收纳到这里，主界面保持简洁。',
     })[activeTab.key] ?? ''}</span>
@@ -1488,7 +1693,8 @@ function renderDesigner() {
     return;
   }
 
-  const visible = state.activeTab === 'editor';
+  const hasDesigner = state.designer && (state.designer.workflow_id || state.designer.name || state.designer.steps?.length > 0);
+  const visible = state.activeTab === 'flows' && hasDesigner;
   panel.hidden = !visible;
   if (!visible) {
     return;
@@ -1540,8 +1746,12 @@ function fieldItem(label, control, hint = '', wide = false) {
 }
 
 function stepKindOptions(currentKind) {
-  return STEP_TYPES.map((item) => `
-    <option value="${item.key}" ${item.key === currentKind ? 'selected' : ''}>${escapeHtml(item.label)}</option>
+  return STEP_TYPE_GROUPS.map((group) => `
+    <optgroup label="${escapeHtml(group.group)}">
+      ${group.items.map((item) => `
+        <option value="${item.key}" ${item.key === currentKind ? 'selected' : ''}>${escapeHtml(item.label)}</option>
+      `).join('')}
+    </optgroup>
   `).join('');
 }
 
@@ -1584,9 +1794,10 @@ function renderSequenceEditor(step, stepPath) {
 }
 
 
-function renderBranchPane(steps, listPath, title, description) {
+function renderBranchPane(steps, listPath, title, description, branchType = '') {
+  const typeClass = branchType ? ` branch-${branchType}` : '';
   return `
-    <section class="branch-pane">
+    <section class="branch-pane${typeClass}">
       <div class="subsection-head">
         <div>
           <strong>${escapeHtml(title)}</strong>
@@ -1669,11 +1880,23 @@ function renderVariableSuggestInput({ stepPath, field, value, placeholder, scope
 
 function renderStepFields(step, stepPath) {
   if (step.kind === 'delay') {
-    return fieldItem(
-      '等待时间(ms)',
-      `<input class="control-input" type="number" min="0" max="600000" step="10" value="${escapeHtml(step.milliseconds)}" oninput="window.updateStepField('${stepPath}', 'milliseconds', this.value, 'int')" />`,
-      '用于主动等待下一步执行。'
-    );
+    return [
+      fieldItem(
+        '等待时间(毫秒)',
+        `<input class="control-input" type="number" min="0" max="600000" step="10" value="${escapeHtml(step.milliseconds)}" oninput="window.updateStepField('${stepPath}', 'milliseconds', this.value, 'int')" />`,
+        '固定等待。如果填了随机范围，这个值会被忽略。'
+      ),
+      fieldItem(
+        '随机最短(毫秒)',
+        `<input class="control-input" type="number" min="0" max="600000" step="10" value="${escapeHtml(step.random_min)}" oninput="window.updateStepField('${stepPath}', 'random_min', this.value, 'int')" />`,
+        '随机等待的最短时间，两项都填且最长>最短时生效。'
+      ),
+      fieldItem(
+        '随机最长(毫秒)',
+        `<input class="control-input" type="number" min="0" max="600000" step="10" value="${escapeHtml(step.random_max)}" oninput="window.updateStepField('${stepPath}', 'random_max', this.value, 'int')" />`,
+        '随机等待的最长时间。'
+      ),
+    ].join('');
   }
 
   if (step.kind === 'key_sequence') {
@@ -1692,20 +1915,20 @@ function renderStepFields(step, stepPath) {
         true,
       ),
       fieldItem(
-        '保存变量名',
+        '结果名称',
         `<input class="control-input" value="${escapeHtml(step.save_as)}" placeholder="target" oninput="window.updateStepField('${stepPath}', 'save_as', this.value)" />`,
-        '命中的坐标会写入这个变量。'
+        '找到的坐标会存到这个名称里，后面的步骤可以用它。'
       ),
       fieldItem(
-        '置信度',
+        '匹配精度',
         `<input class="control-input" type="number" min="0.55" max="0.99" step="0.01" value="${escapeHtml(step.confidence)}" oninput="window.updateStepField('${stepPath}', 'confidence', this.value, 'float')" />`
       ),
       fieldItem(
-        '超时(ms)',
+        '超时(毫秒)',
         `<input class="control-input" type="number" min="100" max="600000" step="100" value="${escapeHtml(step.timeout_ms)}" oninput="window.updateStepField('${stepPath}', 'timeout_ms', this.value, 'int')" />`
       ),
       fieldItem(
-        '搜索步长',
+        '扫描间隔',
         `<input class="control-input" type="number" min="1" max="64" step="1" value="${escapeHtml(step.search_step)}" oninput="window.updateStepField('${stepPath}', 'search_step', this.value, 'int')" />`
       ),
     ].join('');
@@ -1715,14 +1938,14 @@ function renderStepFields(step, stepPath) {
     const isCurrent = step.source === 'current';
 
     const sourceControl = fieldItem(
-      '坐标来源',
+      '点哪里',
       `<select class="control-input" onchange="window.updateStepField('${stepPath}', 'source', this.value)">
-        <option value="var" ${step.source === 'var' ? 'selected' : ''}>来自本地变量</option>
-        <option value="shared" ${step.source === 'shared' ? 'selected' : ''}>来自共享变量</option>
+        <option value="var" ${step.source === 'var' ? 'selected' : ''}>来自找图结果</option>
+        <option value="shared" ${step.source === 'shared' ? 'selected' : ''}>来自后台识图</option>
         <option value="absolute" ${step.source === 'absolute' ? 'selected' : ''}>固定坐标</option>
         <option value="current" ${step.source === 'current' ? 'selected' : ''}>当前鼠标位置</option>
       </select>`,
-      '建议优先和识图变量结合。'
+      '建议优先和找图结果结合。'
     );
 
     const targetControl = isCurrent
@@ -1739,7 +1962,7 @@ function renderStepFields(step, stepPath) {
             ),
           ].join('')
         : fieldItem(
-            '变量名',
+            '名称',
             renderVariableSuggestInput({
               stepPath,
               field: 'var_name',
@@ -1747,7 +1970,7 @@ function renderStepFields(step, stepPath) {
               placeholder: 'target',
               scope: step.source === 'shared' ? 'shared' : 'local',
             }),
-            step.source === 'shared' ? '支持搜索并选择异步识图共享变量，也可手动输入。' : '支持搜索并选择流程内识图变量，也可手动输入。'
+            step.source === 'shared' ? '可搜索后台识图结果，也可手动输入。' : '可搜索流程内找图结果，也可手动输入。'
           );
 
     const modifiers = Array.isArray(step.modifiers) ? step.modifiers : [];
@@ -1773,7 +1996,7 @@ function renderStepFields(step, stepPath) {
     `;
 
     const modifierDelayControl = fieldItem(
-      '修饰键延迟(ms)',
+      '修饰键延迟(毫秒)',
       `<input class="control-input" type="number" min="0" max="5000" step="10"
               value="${escapeHtml(step.modifier_delay_ms)}"
               oninput="window.updateStepField('${stepPath}', 'modifier_delay_ms', this.value, 'int')" />`,
@@ -1792,7 +2015,7 @@ function renderStepFields(step, stepPath) {
             `<input class="control-input" type="number" step="1" value="${escapeHtml(step.offset_y)}" oninput="window.updateStepField('${stepPath}', 'offset_y', this.value, 'int')" />`
           ),
           fieldItem(
-            '点击后停顿(ms)',
+            '点击后停顿(毫秒)',
             `<input class="control-input" type="number" min="0" max="600000" step="10" value="${escapeHtml(step.settle_ms)}" oninput="window.updateStepField('${stepPath}', 'settle_ms', this.value, 'int')" />`
           ),
           `
@@ -1813,6 +2036,11 @@ function renderStepFields(step, stepPath) {
           <option value="right" ${step.button === 'right' ? 'selected' : ''}>右键</option>
         </select>`
       ),
+      fieldItem(
+        '点击次数',
+        `<input class="control-input" type="number" min="1" max="5" step="1" value="${escapeHtml(step.click_count)}" oninput="window.updateStepField('${stepPath}', 'click_count', this.value, 'int')" />`,
+        '1=单击，2=双击。'
+      ),
       modifierControl,
       modifierDelayControl,
       extraControls,
@@ -1824,15 +2052,15 @@ function renderStepFields(step, stepPath) {
     const elseSteps = Array.isArray(step.else_steps) ? step.else_steps : [];
     return [
       fieldItem(
-        '变量来源',
+        '数据来源',
         `<select class="control-input" onchange="window.updateStepField('${stepPath}', 'variable_scope', this.value)">
-          <option value="local" ${step.variable_scope !== 'shared' ? 'selected' : ''}>本地变量</option>
-          <option value="shared" ${step.variable_scope === 'shared' ? 'selected' : ''}>异步识图共享变量</option>
+          <option value="local" ${step.variable_scope !== 'shared' ? 'selected' : ''}>流程内找图结果</option>
+          <option value="shared" ${step.variable_scope === 'shared' ? 'selected' : ''}>后台识图结果</option>
         </select>`,
-        '异步识图写入的是共享变量；流程内 detect_image 写入的是本地变量。',
+        '后台识图的结果是共享的；流程里"截图找图"的结果是本地的。',
       ),
       fieldItem(
-        '判断变量名',
+        '要判断的名称',
         renderVariableSuggestInput({
           stepPath,
           field: 'var_name',
@@ -1840,13 +2068,13 @@ function renderStepFields(step, stepPath) {
           placeholder: 'target',
           scope: step.variable_scope === 'shared' ? 'shared' : 'local',
         }),
-        step.variable_scope === 'shared' ? '支持搜索并选择异步识图共享变量，也可手动输入。' : '支持搜索并选择流程内识图变量，也可手动输入。',
+        step.variable_scope === 'shared' ? '可搜索后台识图结果，也可手动输入。' : '可搜索流程内找图结果，也可手动输入。',
         true,
       ),
       `
         <div class="branch-grid field-wide-span">
-          ${renderBranchPane(thenSteps, `${stepPath}.then_steps`, '命中分支', '当变量 found=true 时执行')}
-          ${renderBranchPane(elseSteps, `${stepPath}.else_steps`, '未命中分支', '当变量 found=false 时执行')}
+          ${renderBranchPane(thenSteps, `${stepPath}.then_steps`, '找到了', '图片匹配成功时执行', 'hit')}
+          ${renderBranchPane(elseSteps, `${stepPath}.else_steps`, '没找到', '图片匹配失败时执行', 'miss')}
         </div>
       `,
     ].join('');
@@ -1855,15 +2083,15 @@ function renderStepFields(step, stepPath) {
   if (step.kind === 'set_variable_state') {
     return [
       fieldItem(
-        '变量来源',
+        '数据来源',
         `<select class="control-input" onchange="window.updateStepField('${stepPath}', 'variable_scope', this.value)">
-          <option value="local" ${step.variable_scope !== 'shared' ? 'selected' : ''}>本地变量</option>
-          <option value="shared" ${step.variable_scope === 'shared' ? 'selected' : ''}>异步识图共享变量</option>
+          <option value="local" ${step.variable_scope !== 'shared' ? 'selected' : ''}>流程内找图结果</option>
+          <option value="shared" ${step.variable_scope === 'shared' ? 'selected' : ''}>后台识图结果</option>
         </select>`,
-        '可把流程内变量或异步识图共享变量直接设为命中 / 未命中。',
+        '可把找图结果直接改成"找到了"或"没找到"。',
       ),
       fieldItem(
-        '变量名',
+        '名称',
         renderVariableSuggestInput({
           stepPath,
           field: 'var_name',
@@ -1871,15 +2099,15 @@ function renderStepFields(step, stepPath) {
           placeholder: 'target',
           scope: step.variable_scope === 'shared' ? 'shared' : 'local',
         }),
-        step.variable_scope === 'shared' ? '支持搜索并选择异步识图共享变量，也可手动输入。' : '支持搜索并选择流程内识图变量，也可手动输入。',
+        step.variable_scope === 'shared' ? '可搜索后台识图结果，也可手动输入。' : '可搜索流程内找图结果，也可手动输入。',
       ),
       fieldItem(
-        '设置结果',
+        '改成什么',
         `<select class="control-input" onchange="window.updateStepField('${stepPath}', 'state', this.value)">
-          <option value="found" ${step.state === 'found' ? 'selected' : ''}>设为命中</option>
-          <option value="missing" ${step.state !== 'found' ? 'selected' : ''}>设为未命中</option>
+          <option value="found" ${step.state === 'found' ? 'selected' : ''}>找到了</option>
+          <option value="missing" ${step.state !== 'found' ? 'selected' : ''}>没找到</option>
         </select>`,
-        '适合在命中分支执行完后，手动把变量复位。',
+        '比如在"找到了"分支执行完后，手动把状态改回"没找到"。',
       ),
     ].join('');
   }
@@ -1896,13 +2124,355 @@ function renderStepFields(step, stepPath) {
           capturePath: stepPath,
           captureField: 'key',
         })}`,
-        '按住该键期间执行下方子步骤，结束后自动松开。'
+        '按住该键期间执行下方的步骤，或按住指定时长后松开。'
+      ),
+      fieldItem(
+        '定时长按(毫秒)',
+        `<input class="control-input" type="number" min="0" max="600000" step="50" value="${escapeHtml(step.duration_ms)}" oninput="window.updateStepField('${stepPath}', 'duration_ms', this.value, 'int')" />`,
+        '大于0时忽略下方步骤，按住N毫秒后自动松开。设为0则执行下方步骤。'
       ),
       `
         <div class="field-wide-span">
-          ${renderBranchPane(holdSteps, `${stepPath}.steps`, '按住期间执行的步骤', '按键按住期间依次执行以下步骤')}
+          ${renderBranchPane(holdSteps, `${stepPath}.steps`, '按住期间执行的步骤', '按键按住期间依次执行以下步骤（定时长按>0时忽略）')}
         </div>
       `,
+    ].join('');
+  }
+
+  if (step.kind === 'mouse_scroll') {
+    return [
+      fieldItem(
+        '滚动方向',
+        `<select class="control-input" onchange="window.updateStepField('${stepPath}', 'direction', this.value)">
+          <option value="down" ${step.direction === 'down' ? 'selected' : ''}>向下</option>
+          <option value="up" ${step.direction === 'up' ? 'selected' : ''}>向上</option>
+          <option value="left" ${step.direction === 'left' ? 'selected' : ''}>向左</option>
+          <option value="right" ${step.direction === 'right' ? 'selected' : ''}>向右</option>
+        </select>`
+      ),
+      fieldItem(
+        '滚动格数',
+        `<input class="control-input" type="number" min="1" max="100" step="1" value="${escapeHtml(step.clicks)}" oninput="window.updateStepField('${stepPath}', 'clicks', this.value, 'int')" />`,
+        '每格约等于鼠标滚轮一格（120单位）。'
+      ),
+    ].join('');
+  }
+
+  if (step.kind === 'mouse_hold') {
+    const isAbsolute = step.source === 'absolute';
+    const isCurrent = step.source === 'current';
+    return [
+      fieldItem(
+        '鼠标按键',
+        `<select class="control-input" onchange="window.updateStepField('${stepPath}', 'button', this.value)">
+          <option value="left" ${step.button === 'left' ? 'selected' : ''}>左键</option>
+          <option value="right" ${step.button === 'right' ? 'selected' : ''}>右键</option>
+          <option value="middle" ${step.button === 'middle' ? 'selected' : ''}>中键</option>
+        </select>`
+      ),
+      fieldItem(
+        '长按时长(毫秒)',
+        `<input class="control-input" type="number" min="0" max="600000" step="50" value="${escapeHtml(step.duration_ms)}" oninput="window.updateStepField('${stepPath}', 'duration_ms', this.value, 'int')" />`,
+        '按住鼠标按键的持续时间。'
+      ),
+      fieldItem(
+        '点哪里',
+        `<select class="control-input" onchange="window.updateStepField('${stepPath}', 'source', this.value)">
+          <option value="current" ${step.source === 'current' ? 'selected' : ''}>当前鼠标位置</option>
+          <option value="var" ${step.source === 'var' ? 'selected' : ''}>来自找图结果</option>
+          <option value="shared" ${step.source === 'shared' ? 'selected' : ''}>来自后台识图</option>
+          <option value="absolute" ${step.source === 'absolute' ? 'selected' : ''}>固定坐标</option>
+        </select>`,
+        '选择在哪个位置按住鼠标。'
+      ),
+      isCurrent ? '' : isAbsolute
+        ? [
+            fieldItem('X 坐标', `<input class="control-input" type="number" step="1" value="${escapeHtml(step.x)}" oninput="window.updateStepField('${stepPath}', 'x', this.value, 'int')" />`),
+            fieldItem('Y 坐标', `<input class="control-input" type="number" step="1" value="${escapeHtml(step.y)}" oninput="window.updateStepField('${stepPath}', 'y', this.value, 'int')" />`),
+          ].join('')
+        : [
+            fieldItem(
+              '名称',
+              renderVariableSuggestInput({
+                stepPath,
+                field: 'var_name',
+                value: step.var_name,
+                placeholder: 'target',
+                scope: step.source === 'shared' ? 'shared' : 'local',
+              })
+            ),
+            fieldItem('X 偏移', `<input class="control-input" type="number" step="1" value="${escapeHtml(step.offset_x)}" oninput="window.updateStepField('${stepPath}', 'offset_x', this.value, 'int')" />`),
+            fieldItem('Y 偏移', `<input class="control-input" type="number" step="1" value="${escapeHtml(step.offset_y)}" oninput="window.updateStepField('${stepPath}', 'offset_y', this.value, 'int')" />`),
+          ].join(''),
+    ].join('');
+  }
+
+  if (step.kind === 'detect_color') {
+    const isAbsolute = step.source === 'absolute';
+    return [
+      fieldItem(
+        '点哪里',
+        `<select class="control-input" onchange="window.updateStepField('${stepPath}', 'source', this.value)">
+          <option value="absolute" ${step.source === 'absolute' ? 'selected' : ''}>固定坐标</option>
+          <option value="var" ${step.source === 'var' ? 'selected' : ''}>来自找图结果</option>
+          <option value="shared" ${step.source === 'shared' ? 'selected' : ''}>来自后台识图</option>
+        </select>`,
+        '选择在哪个位置取色。'
+      ),
+      isAbsolute
+        ? [
+            fieldItem('X 坐标', `<input class="control-input" type="number" step="1" value="${escapeHtml(step.x)}" oninput="window.updateStepField('${stepPath}', 'x', this.value, 'int')" />`),
+            fieldItem('Y 坐标', `<input class="control-input" type="number" step="1" value="${escapeHtml(step.y)}" oninput="window.updateStepField('${stepPath}', 'y', this.value, 'int')" />`),
+          ].join('')
+        : [
+            fieldItem(
+              '名称',
+              renderVariableSuggestInput({
+                stepPath,
+                field: 'var_name',
+                value: step.var_name,
+                placeholder: 'target',
+                scope: step.source === 'shared' ? 'shared' : 'local',
+              })
+            ),
+            fieldItem('X 偏移', `<input class="control-input" type="number" step="1" value="${escapeHtml(step.offset_x)}" oninput="window.updateStepField('${stepPath}', 'offset_x', this.value, 'int')" />`),
+            fieldItem('Y 偏移', `<input class="control-input" type="number" step="1" value="${escapeHtml(step.offset_y)}" oninput="window.updateStepField('${stepPath}', 'offset_y', this.value, 'int')" />`),
+          ].join(''),
+      fieldItem(
+        '期望色值',
+        `<input class="control-input" value="${escapeHtml(step.expected_color)}" placeholder="#FF0000" oninput="window.updateStepField('${stepPath}', 'expected_color', this.value)" />`,
+        '十六进制颜色值（如 #FF0000）。留空则只取色不判断。'
+      ),
+      fieldItem(
+        '容差',
+        `<input class="control-input" type="number" min="0" max="255" step="1" value="${escapeHtml(step.tolerance)}" oninput="window.updateStepField('${stepPath}', 'tolerance', this.value, 'int')" />`,
+        'RGB 各通道允许的偏差值（0=精确匹配）。'
+      ),
+      fieldItem(
+        '结果名称',
+        `<input class="control-input" value="${escapeHtml(step.save_as)}" placeholder="color_result" oninput="window.updateStepField('${stepPath}', 'save_as', this.value)" />`,
+        '取色结果（含是否匹配、颜色值、RGB分量）存到这个名称里。'
+      ),
+    ].join('');
+  }
+
+  if (step.kind === 'loop') {
+    const loopSteps = Array.isArray(step.steps) ? step.steps : [];
+    const isCount = step.loop_type === 'count';
+    return [
+      fieldItem(
+        '循环类型',
+        `<select class="control-input" onchange="window.updateStepField('${stepPath}', 'loop_type', this.value)">
+          <option value="count" ${step.loop_type === 'count' ? 'selected' : ''}>固定次数</option>
+          <option value="while_found" ${step.loop_type === 'while_found' ? 'selected' : ''}>找到了就一直循环</option>
+          <option value="while_not_found" ${step.loop_type === 'while_not_found' ? 'selected' : ''}>没找到就一直循环</option>
+        </select>`
+      ),
+      fieldItem(
+        isCount ? '循环次数' : '最多循环几次',
+        `<input class="control-input" type="number" min="1" max="99999" step="1" value="${escapeHtml(step.max_iterations)}" oninput="window.updateStepField('${stepPath}', 'max_iterations', this.value, 'int')" />`,
+        isCount ? '重复执行里面步骤的次数。' : '防止死循环的安全上限。'
+      ),
+      isCount ? '' : [
+        fieldItem(
+          '数据来源',
+          `<select class="control-input" onchange="window.updateStepField('${stepPath}', 'variable_scope', this.value)">
+            <option value="local" ${step.variable_scope !== 'shared' ? 'selected' : ''}>流程内找图结果</option>
+            <option value="shared" ${step.variable_scope === 'shared' ? 'selected' : ''}>后台识图结果</option>
+          </select>`
+        ),
+        fieldItem(
+          '要判断的名称',
+          renderVariableSuggestInput({
+            stepPath,
+            field: 'var_name',
+            value: step.var_name,
+            placeholder: 'target',
+            scope: step.variable_scope === 'shared' ? 'shared' : 'local',
+          })
+        ),
+      ].join(''),
+      `
+        <div class="field-wide-span">
+          ${renderBranchPane(loopSteps, `${stepPath}.steps`, '循环体', '每次循环执行以下步骤')}
+        </div>
+      `,
+    ].join('');
+  }
+
+  if (step.kind === 'call_workflow') {
+    return [
+      fieldItem(
+        '流程名称',
+        `<input class="control-input" value="${escapeHtml(step.target_workflow_id)}" placeholder="输入要调用的流程ID" oninput="window.updateStepField('${stepPath}', 'target_workflow_id', this.value)" />`,
+        '填写目标流程的 ID，执行完后会自动回到当前流程继续。'
+      ),
+    ].join('');
+  }
+
+  if (step.kind === 'if_condition') {
+    const thenSteps = Array.isArray(step.then_steps) ? step.then_steps : [];
+    const elseSteps = Array.isArray(step.else_steps) ? step.else_steps : [];
+    return [
+      fieldItem(
+        '数据来源',
+        `<select class="control-input" onchange="window.updateStepField('${stepPath}', 'variable_scope', this.value)">
+          <option value="local" ${step.variable_scope !== 'shared' ? 'selected' : ''}>流程内找图结果</option>
+          <option value="shared" ${step.variable_scope === 'shared' ? 'selected' : ''}>后台识图结果</option>
+        </select>`
+      ),
+      fieldItem(
+        '名称',
+        renderVariableSuggestInput({
+          stepPath,
+          field: 'var_name',
+          value: step.var_name,
+          placeholder: 'target',
+          scope: step.variable_scope === 'shared' ? 'shared' : 'local',
+        })
+      ),
+      fieldItem(
+        '要看哪个字段',
+        `<input class="control-input" value="${escapeHtml(step.field)}" placeholder="found" oninput="window.updateStepField('${stepPath}', 'field', this.value)" />`,
+        '比如 found（是否找到）、x、y、color 等。'
+      ),
+      fieldItem(
+        '运算符',
+        `<select class="control-input" onchange="window.updateStepField('${stepPath}', 'operator', this.value)">
+          <option value="==" ${step.operator === '==' ? 'selected' : ''}>==(等于)</option>
+          <option value="!=" ${step.operator === '!=' ? 'selected' : ''}>!=(不等于)</option>
+          <option value=">" ${step.operator === '>' ? 'selected' : ''}>>(大于)</option>
+          <option value=">=" ${step.operator === '>=' ? 'selected' : ''}>=(大于等于)</option>
+          <option value="<" ${step.operator === '<' ? 'selected' : ''}><(小于)</option>
+          <option value="<=" ${step.operator === '<=' ? 'selected' : ''}<=(小于等于)</option>
+        </select>`
+      ),
+      fieldItem(
+        '比较值',
+        `<input class="control-input" value="${escapeHtml(step.value)}" placeholder="true" oninput="window.updateStepField('${stepPath}', 'value', this.value)" />`,
+        '数值或字符串。true/false 表示是/否。'
+      ),
+      `<div class="field-wide-span">
+        ${renderBranchPane(thenSteps, `${stepPath}.then_steps`, '满足条件时', '条件为真时执行', 'hit')}
+      </div>`,
+      `<div class="field-wide-span">
+        ${renderBranchPane(elseSteps, `${stepPath}.else_steps`, '不满足条件时', '条件为假时执行（可选）', 'miss')}
+      </div>`,
+    ].join('');
+  }
+
+  if (step.kind === 'log') {
+    return [
+      fieldItem(
+        '输出内容',
+        `<input class="control-input" value="${escapeHtml(step.message)}" placeholder="支持 {名称.字段} 引用，如 {target.x}" oninput="window.updateStepField('${stepPath}', 'message', this.value)" />`,
+        '支持用 {名称.字段} 引用数据，如 {target.x}。'
+      ),
+      fieldItem(
+        '日志级别',
+        `<select class="control-input" onchange="window.updateStepField('${stepPath}', 'level', this.value)">
+          <option value="info" ${step.level === 'info' ? 'selected' : ''}>信息</option>
+          <option value="warn" ${step.level === 'warn' ? 'selected' : ''}>警告</option>
+          <option value="success" ${step.level === 'success' ? 'selected' : ''}>成功</option>
+        </select>`
+      ),
+    ].join('');
+  }
+
+  if (step.kind === 'mouse_drag') {
+    const isAbsolute = step.source === 'absolute';
+    const coordFields = isAbsolute ? [
+      fieldItem('起点X', `<input class="control-input" type="number" value="${escapeHtml(step.start_x)}" oninput="window.updateStepField('${stepPath}', 'start_x', this.value, 'int')" />`),
+      fieldItem('起点Y', `<input class="control-input" type="number" value="${escapeHtml(step.start_y)}" oninput="window.updateStepField('${stepPath}', 'start_y', this.value, 'int')" />`),
+      fieldItem('终点X', `<input class="control-input" type="number" value="${escapeHtml(step.end_x)}" oninput="window.updateStepField('${stepPath}', 'end_x', this.value, 'int')" />`),
+      fieldItem('终点Y', `<input class="control-input" type="number" value="${escapeHtml(step.end_y)}" oninput="window.updateStepField('${stepPath}', 'end_y', this.value, 'int')" />`),
+    ] : [
+      fieldItem('名称', renderVariableSuggestInput({ stepPath, field: 'var_name', value: step.var_name, placeholder: 'target', scope: step.source === 'shared' ? 'shared' : 'local' })),
+      fieldItem('起点偏移X', `<input class="control-input" type="number" value="${escapeHtml(step.start_offset_x)}" oninput="window.updateStepField('${stepPath}', 'start_offset_x', this.value, 'int')" />`),
+      fieldItem('起点偏移Y', `<input class="control-input" type="number" value="${escapeHtml(step.start_offset_y)}" oninput="window.updateStepField('${stepPath}', 'start_offset_y', this.value, 'int')" />`),
+      fieldItem('终点偏移X', `<input class="control-input" type="number" value="${escapeHtml(step.end_offset_x)}" oninput="window.updateStepField('${stepPath}', 'end_offset_x', this.value, 'int')" />`),
+      fieldItem('终点偏移Y', `<input class="control-input" type="number" value="${escapeHtml(step.end_offset_y)}" oninput="window.updateStepField('${stepPath}', 'end_offset_y', this.value, 'int')" />`),
+    ];
+    return [
+      fieldItem(
+        '点哪里',
+        `<select class="control-input" onchange="window.updateStepField('${stepPath}', 'source', this.value)">
+          <option value="absolute" ${step.source === 'absolute' ? 'selected' : ''}>固定坐标</option>
+          <option value="var" ${step.source === 'var' ? 'selected' : ''}>找图结果偏移</option>
+          <option value="shared" ${step.source === 'shared' ? 'selected' : ''}>后台识图偏移</option>
+        </select>`
+      ),
+      ...coordFields,
+      fieldItem(
+        '鼠标按键',
+        `<select class="control-input" onchange="window.updateStepField('${stepPath}', 'button', this.value)">
+          <option value="left" ${step.button === 'left' ? 'selected' : ''}>左键</option>
+          <option value="right" ${step.button === 'right' ? 'selected' : ''}>右键</option>
+          <option value="middle" ${step.button === 'middle' ? 'selected' : ''}>中键</option>
+        </select>`
+      ),
+      fieldItem(
+        '拖拽时长(毫秒)',
+        `<input class="control-input" type="number" min="0" max="60000" step="50" value="${escapeHtml(step.duration_ms)}" oninput="window.updateStepField('${stepPath}', 'duration_ms', this.value, 'int')" />`,
+        '从起点到终点的移动耗时，越大越慢。'
+      ),
+    ].join('');
+  }
+
+  if (step.kind === 'type_text') {
+    return [
+      fieldItem(
+        '输入文本',
+        `<textarea class="control-input" rows="2" placeholder="要输入的文本内容" oninput="window.updateStepField('${stepPath}', 'text', this.value)">${escapeHtml(step.text)}</textarea>`,
+        '逐字符输入，支持中文和特殊字符。'
+      ),
+      fieldItem(
+        '字符间隔(毫秒)',
+        `<input class="control-input" type="number" min="0" max="5000" step="10" value="${escapeHtml(step.interval_ms)}" oninput="window.updateStepField('${stepPath}', 'interval_ms', this.value, 'int')" />`,
+        '每个字符之间的等待时间。'
+      ),
+    ].join('');
+  }
+
+  if (step.kind === 'mouse_move') {
+    const isAbsolute = step.source === 'absolute';
+    const coordFields = isAbsolute ? [
+      fieldItem('X', `<input class="control-input" type="number" value="${escapeHtml(step.x)}" oninput="window.updateStepField('${stepPath}', 'x', this.value, 'int')" />`),
+      fieldItem('Y', `<input class="control-input" type="number" value="${escapeHtml(step.y)}" oninput="window.updateStepField('${stepPath}', 'y', this.value, 'int')" />`),
+    ] : [
+      fieldItem('名称', renderVariableSuggestInput({ stepPath, field: 'var_name', value: step.var_name, placeholder: 'target', scope: step.source === 'shared' ? 'shared' : 'local' })),
+      fieldItem('偏移X', `<input class="control-input" type="number" value="${escapeHtml(step.offset_x)}" oninput="window.updateStepField('${stepPath}', 'offset_x', this.value, 'int')" />`),
+      fieldItem('偏移Y', `<input class="control-input" type="number" value="${escapeHtml(step.offset_y)}" oninput="window.updateStepField('${stepPath}', 'offset_y', this.value, 'int')" />`),
+    ];
+    return [
+      fieldItem(
+        '点哪里',
+        `<select class="control-input" onchange="window.updateStepField('${stepPath}', 'source', this.value)">
+          <option value="absolute" ${step.source === 'absolute' ? 'selected' : ''}>固定坐标</option>
+          <option value="var" ${step.source === 'var' ? 'selected' : ''}>找图结果偏移</option>
+          <option value="shared" ${step.source === 'shared' ? 'selected' : ''}>后台识图偏移</option>
+        </select>`
+      ),
+      ...coordFields,
+    ].join('');
+  }
+
+  if (step.kind === 'set_variable') {
+    return [
+      fieldItem(
+        '名称',
+        renderVariableSuggestInput({ stepPath, field: 'var_name', value: step.var_name, placeholder: 'target', scope: 'local' })
+      ),
+      fieldItem(
+        '要改哪个字段',
+        `<input class="control-input" value="${escapeHtml(step.field)}" placeholder="found" oninput="window.updateStepField('${stepPath}', 'field', this.value)" />`,
+        '比如 found、x、y 或自定义的字段名。'
+      ),
+      fieldItem(
+        '值',
+        `<input class="control-input" value="${escapeHtml(step.value)}" placeholder="true" oninput="window.updateStepField('${stepPath}', 'value', this.value)" />`,
+        '自动识别类型：true/false 表示是/否，纯数字为数值，其余为文本。'
+      ),
     ].join('');
   }
 
@@ -1919,32 +2489,36 @@ function renderStepFields(step, stepPath) {
       '点击输入框后直接按键录入，按 Backspace 或 Delete 清空。'
     ),
     fieldItem(
-      '按后等待(ms)',
+      '按后等待(毫秒)',
       `<input class="control-input" type="number" min="0" max="600000" step="10" value="${escapeHtml(step.delay_ms_after)}" oninput="window.updateStepField('${stepPath}', 'delay_ms_after', this.value, 'int')" />`
     ),
   ].join('');
 }
 
 function renderStepCard(step, stepPath, index, nested = false) {
+  const collapsed = state.collapsedSteps.has(stepPath);
+  const collapseIcon = collapsed ? 'arrow-down' : 'arrow-up';
+  const collapseLabel = collapsed ? '展开' : '收起';
   return `
-    <article class="step-card ${nested ? 'nested' : ''}">
+    <article class="step-card ${nested ? 'nested' : ''} ${collapsed ? 'collapsed' : ''}">
       <div class="step-header">
-        <div>
-          <div class="eyebrow">步骤 ${index}</div>
+        <div class="step-header-left" onclick="window.toggleStepCollapse('${stepPath}')">
+          <small class="step-index">步骤 ${index}</small>
           <strong>${escapeHtml(stepTypeLabel(step.kind))}</strong>
+          ${collapsed ? `<span class="step-preview-inline">${escapeHtml(stepPreviewText(step))}</span>` : ''}
         </div>
         <div class="step-header-actions">
           <select class="control-input compact-input" onchange="window.changeDesignerStepKind('${stepPath}', this.value)">
             ${stepKindOptions(step.kind)}
           </select>
+          ${renderIconButton({ icon: 'copy', label: '复制步骤', extraClass: 'small-button', onClick: `window.duplicateDesignerStep('${stepPath}')` })}
           ${renderIconButton({ icon: 'delete-o', label: '删除步骤', extraClass: 'small-button danger-button', onClick: `window.removeDesignerStep('${stepPath}')` })}
           ${renderIconButton({ icon: 'arrow-up', label: '上移步骤', extraClass: 'small-button', onClick: `window.moveDesignerStep('${stepPath}', -1)` })}
           ${renderIconButton({ icon: 'arrow-down', label: '下移步骤', extraClass: 'small-button', onClick: `window.moveDesignerStep('${stepPath}', 1)` })}
+          ${renderIconButton({ icon: collapseIcon, label: collapseLabel, extraClass: 'small-button', onClick: `window.toggleStepCollapse('${stepPath}')` })}
         </div>
       </div>
-      <div class="step-grid">
-        ${renderStepFields(step, stepPath)}
-      </div>
+      ${collapsed ? '' : `<div class="step-grid">${renderStepFields(step, stepPath)}</div>`}
     </article>
   `;
 }
@@ -2009,8 +2583,8 @@ function stepPreviewText(step) {
       return `${modifiers}点击 (${step.x}, ${step.y})`;
     }
     return step.source === 'shared'
-      ? `${modifiers}点击共享变量 ${step.var_name}`
-      : `${modifiers}点击变量 ${step.var_name}`;
+      ? `${modifiers}点击后台识图结果 ${step.var_name}`
+      : `${modifiers}点击找图结果 ${step.var_name}`;
   }
   if (step.kind === 'if_var_found') {
     return step.variable_scope === 'shared'
@@ -2019,7 +2593,7 @@ function stepPreviewText(step) {
   }
   if (step.kind === 'set_variable_state') {
     const scopeLabel = step.variable_scope === 'shared' ? 'shared.' : '';
-    return `设置 ${scopeLabel}${step.var_name} = ${step.state === 'found' ? '命中' : '未命中'}`;
+    return `设置 ${scopeLabel}${step.var_name} = ${step.state === 'found' ? '找到了' : '没找到'}`;
   }
   if (step.kind === 'key_hold') {
     return `按住 ${step.key || '--'} 执行 ${step.steps?.length ?? 0} 步`;
@@ -2124,8 +2698,8 @@ function asyncMonitorStatusLabel(status) {
   return ({
     idle: '待机',
     running: '运行中',
-    hit: '命中',
-    miss: '未命中',
+    hit: '找到了',
+    miss: '没找到',
     error: '异常',
     disabled: '已停用',
   })[status] ?? (status || '待机');
@@ -2179,11 +2753,11 @@ function renderAsyncMonitorEditorCard() {
       <div class="workflow-top">
         <div>
           <div class="badge-row">
-            <span class="source-badge custom">异步识图</span>
+            <span class="source-badge custom">后台识图</span>
             <span class="category-badge">${escapeHtml(asyncMonitorPresetLabel(editor.preset))}</span>
           </div>
-          <h4>${escapeHtml(editor.monitor_id ? `编辑识别：${editor.name || editor.monitor_id}` : '新建异步识图')}</h4>
-          <p>在流程外后台持续识图，并把结果写入变量，供流程步骤直接读取。</p>
+          <h4>${escapeHtml(editor.monitor_id ? `编辑识别：${editor.name || editor.monitor_id}` : '新建后台识图')}</h4>
+          <p>在流程外后台持续找图，并把结果存起来，供流程步骤直接读取。</p>
         </div>
         <div class="card-actions">
           ${renderIconButton({ icon: 'plus', label: '新建识别', onClick: 'window.resetAsyncMonitorEditor()' })}
@@ -2199,14 +2773,14 @@ function renderAsyncMonitorEditorCard() {
         <div class="field-wide-span subsection-head">
           <div>
             <strong>基础设置</strong>
-            <p>先选使用场景，再填写模板图和变量名。</p>
+            <p>先选使用场景，再填写模板图和结果名称。</p>
           </div>
         </div>
         ${fieldItem('使用场景', `<select class="control-input" onchange="window.updateAsyncMonitorField('preset', this.value)">
           ${Object.entries(ASYNC_MONITOR_PRESETS).map(([key, item]) => `<option value="${key}" ${key === editor.preset ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}
         </select>`, '系统会按场景带出推荐设置。')}
         ${fieldItem('识别名称', `<input class="control-input" id="async-monitor-name" value="${escapeHtml(editor.name)}" placeholder="例如 开始按钮 / 对话框确认 / Boss图标" oninput="window.updateAsyncMonitorField('name', this.value)" />`)}
-        ${fieldItem('保存到变量', `<input class="control-input" id="async-monitor-output-variable" value="${escapeHtml(editor.output_variable)}" placeholder="target" oninput="window.updateAsyncMonitorField('output_variable', this.value)" />`, '流程中的点击和分支步骤可以直接读取这个变量。')}
+        ${fieldItem('结果名称', `<input class="control-input" id="async-monitor-output-variable" value="${escapeHtml(editor.output_variable)}" placeholder="target" oninput="window.updateAsyncMonitorField('output_variable', this.value)" />`, '流程中的点击和分支步骤可以直接读取这个结果。')}
         ${fieldItem('模板图片', `<div class="template-upload-row">
           <input class="control-input" id="async-monitor-template-path" value="${escapeHtml(editor.template_path)}" placeholder="assets/templates/target_demo.png" oninput="window.updateAsyncMonitorField('template_path', this.value)" />
           <button class="ghost-button small-button" type="button" onclick="window.uploadTemplateForAsyncMonitor()">上传模板</button>
@@ -2243,7 +2817,7 @@ function renderAsyncMonitorEditorCard() {
         ${showFixedRegion ? fieldItem('区域左上 Y', `<input class="control-input" type="number" min="0" step="1" value="${escapeHtml(editor.fixed_region.top)}" oninput="window.updateAsyncMonitorRegionField('top', this.value)" />`) : ''}
         ${showFixedRegion ? fieldItem('区域宽度', `<input class="control-input" type="number" min="0" step="1" value="${escapeHtml(editor.fixed_region.width)}" oninput="window.updateAsyncMonitorRegionField('width', this.value)" />`) : ''}
         ${showFixedRegion ? fieldItem('区域高度', `<input class="control-input" type="number" min="0" step="1" value="${escapeHtml(editor.fixed_region.height)}" oninput="window.updateAsyncMonitorRegionField('height', this.value)" />`, '先填一个大概区域，后续可再细调。') : ''}
-        ${showFollowConfig ? fieldItem('附近查找范围', `<input class="control-input" type="number" min="60" max="4000" step="10" value="${escapeHtml(editor.follow_radius)}" oninput="window.updateAsyncMonitorField('follow_radius', this.value, 'int')" />`, '以上次命中点为中心，按这个范围继续找。') : ''}
+        ${showFollowConfig ? fieldItem('附近查找范围', `<input class="control-input" type="number" min="60" max="4000" step="10" value="${escapeHtml(editor.follow_radius)}" oninput="window.updateAsyncMonitorField('follow_radius', this.value, 'int')" />`, '以上次找到的位置为中心，按这个范围继续找。') : ''}
         ${showFollowConfig ? fieldItem('连续几次没找到后，扩大查找范围', `<input class="control-input" type="number" min="1" max="30" step="1" value="${escapeHtml(editor.recover_after_misses)}" oninput="window.updateAsyncMonitorField('recover_after_misses', this.value, 'int')" />`) : ''}
         <div class="field-wide-span subsection-head">
           <div>
@@ -2251,7 +2825,7 @@ function renderAsyncMonitorEditorCard() {
             <p>只在需要细调时修改，普通场景保持默认即可。</p>
           </div>
         </div>
-        ${fieldItem('结果多久没更新算过期(ms)', `<input class="control-input" type="number" min="100" max="600000" step="100" value="${escapeHtml(editor.stale_after_ms)}" oninput="window.updateAsyncMonitorField('stale_after_ms', this.value, 'int')" />`)}
+        ${fieldItem('结果多久没更新算过期(毫秒)', `<input class="control-input" type="number" min="100" max="600000" step="100" value="${escapeHtml(editor.stale_after_ms)}" oninput="window.updateAsyncMonitorField('stale_after_ms', this.value, 'int')" />`)}
         <label class="toggle toggle-card mini-toggle">
           <input id="async-monitor-enabled" type="checkbox" ${editor.enabled ? 'checked' : ''} onchange="window.updateAsyncMonitorCheckbox('enabled', this.checked)" />
           启用识别
@@ -2261,41 +2835,104 @@ function renderAsyncMonitorEditorCard() {
   `;
 }
 
+function sortWorkflows(workflows) {
+  const sorted = [...workflows];
+  const sortKey = state.flowSort;
+  sorted.sort((a, b) => {
+    if (sortKey === 'hotkey') {
+      return String(a.binding?.hotkey ?? '').localeCompare(String(b.binding?.hotkey ?? ''));
+    }
+    if (sortKey === 'steps') {
+      return getWorkflowSteps(b).length - getWorkflowSteps(a).length;
+    }
+    if (sortKey === 'mode') {
+      return runModeLabel(a.run_mode).localeCompare(runModeLabel(b.run_mode), 'zh-CN');
+    }
+    return String(a.name ?? '').localeCompare(String(b.name ?? ''), 'zh-CN');
+  });
+  return sorted;
+}
+
+function renderWorkflowRow(workflow) {
+  const runtime = getWorkflowRuntime(workflow.workflow_id);
+  const steps = getWorkflowSteps(workflow);
+  const hotkey = workflow.binding?.hotkey || '--';
+  const mode = runModeLabel(workflow.run_mode);
+  const editBtn = workflow.definition_editable
+    ? `<button class="ghost-button small-button" type="button" onclick="window.loadWorkflowIntoDesigner('${workflow.workflow_id}')">编辑</button>`
+    : '';
+  return `
+    <div class="workflow-row">
+      <span class="wf-row-name" title="${escapeHtml(workflow.description ?? '')}">${escapeHtml(workflow.name)}</span>
+      <span class="wf-row-hotkey"><kbd>${escapeHtml(hotkey)}</kbd></span>
+      <span class="wf-row-mode">${escapeHtml(mode)}</span>
+      <span class="wf-row-steps">${steps.length} 步</span>
+      <span class="runtime-badge ${escapeHtml(runtime.status ?? 'idle')}">${escapeHtml(runtime.status_label ?? '待机')}</span>
+      <span class="wf-row-actions">
+        ${editBtn}
+        <button class="ghost-button small-button" type="button" onclick="window.runWorkflow('${workflow.workflow_id}')">执行</button>
+        <button class="ghost-button small-button" type="button" onclick="window.saveWorkflow('${workflow.workflow_id}')">保存</button>
+      </span>
+    </div>
+  `;
+}
+
 function renderFlowWorkspace() {
-  const workflows = getVisibleWorkflows();
+  const workflows = sortWorkflows(getVisibleWorkflows());
   const filters = [
     { key: 'all', label: '全部流程' },
     { key: 'editable', label: '可编辑流程' },
     { key: 'loop', label: '循环流程' },
     { key: 'vision', label: '识图流程' },
   ];
+  const sorts = [
+    { key: 'name', label: '按名称' },
+    { key: 'hotkey', label: '按热键' },
+    { key: 'steps', label: '按步骤数' },
+    { key: 'mode', label: '按模式' },
+  ];
+
+  const isListView = state.flowViewMode === 'list';
+  const clearBtn = state.flowQuery
+    ? `<button class="ghost-button small-button search-clear-btn" type="button" onclick="window.updateFlowSearch('')">\u00d7</button>`
+    : '';
+
+  const workflowContent = workflows.length
+    ? isListView
+      ? `<div class="workflow-list-view">${workflows.map(renderWorkflowRow).join('')}</div>`
+      : `<div class="workflow-grid workflow-grid-page">${workflows.map(renderWorkflowCard).join('')}</div>`
+    : '<div class="empty-state">没有匹配到流程，试试切换筛选或新建一个流程。</div>';
 
   return `
     <div class="workspace-stack">
       <article class="workflow-card workspace-panel">
         <div class="panel-head compact">
           <div>
-            <div class="eyebrow">流程</div>
             <h4>流程列表</h4>
           </div>
           <span class="source-badge custom">显示 ${escapeHtml(workflows.length)} / ${escapeHtml(state.workflows.length)}</span>
         </div>
         <div class="workspace-toolbar">
-          <input
-            class="control-input"
-            value="${escapeHtml(state.flowQuery)}"
-            placeholder="搜索流程名、热键、说明或分类"
-            oninput="window.updateFlowSearch(this.value)"
-          />
+          <div class="search-wrap">
+            <input
+              class="control-input"
+              value="${escapeHtml(state.flowQuery)}"
+              placeholder="搜索流程名、热键、说明或分类"
+              oninput="window.updateFlowSearch(this.value)"
+            />
+            ${clearBtn}
+          </div>
           <select class="control-input compact-input" onchange="window.updateFlowFilter(this.value)">
             ${filters.map((item) => `<option value="${item.key}" ${item.key === state.flowFilter ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}
           </select>
+          <select class="control-input compact-input" onchange="window.updateFlowSort(this.value)">
+            ${sorts.map((item) => `<option value="${item.key}" ${item.key === state.flowSort ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}
+          </select>
+          <button class="ghost-button small-button" type="button" onclick="window.toggleFlowViewMode()">${isListView ? '卡片' : '列表'}</button>
           <button class="primary-button" type="button" onclick="window.resetDesigner(false)">新建流程</button>
         </div>
       </article>
-      ${workflows.length
-        ? `<div class="workflow-grid workflow-grid-page">${workflows.map(renderWorkflowCard).join('')}</div>`
-        : '<div class="empty-state">没有匹配到流程，试试切换筛选或新建一个流程。</div>'}
+      ${workflowContent}
     </div>
   `;
 }
@@ -2326,8 +2963,8 @@ function renderSettingsPanel() {
           ${fieldItem('流程来源', `<input class="control-input" value="${escapeHtml(state.app.workflow_source ?? '--')}" readonly />`)}
           ${fieldItem('当前版本', `<input class="control-input" value="${escapeHtml(state.app.version ?? '--')}" readonly />`)}
           ${fieldItem('流程总数', `<input class="control-input" value="${escapeHtml(state.summary.workflow_count ?? 0)}" readonly />`)}
-          ${fieldItem('异步识图数量', `<input class="control-input" value="${escapeHtml(state.asyncVision.monitors.length)}" readonly />`)}
-          ${fieldItem('共享变量', `<input class="control-input" value="${escapeHtml(state.asyncVision.sharedVariables.length)}" readonly />`)}
+          ${fieldItem('后台识图数量', `<input class="control-input" value="${escapeHtml(state.asyncVision.monitors.length)}" readonly />`)}
+          ${fieldItem('共享数据', `<input class="control-input" value="${escapeHtml(state.asyncVision.sharedVariables.length)}" readonly />`)}
         </div>
       </article>
     </div>
@@ -2353,20 +2990,19 @@ function renderAboutPanel() {
               <span class="source-badge custom">关于</span>
             </div>
             <h4>Luoqi Assistant</h4>
-            <p>当前主界面聚焦在流程、流程编辑、异步识图和运行状态，说明信息统一收纳到这里。</p>
+            <p>当前主界面聚焦在流程、流程编辑、后台识图和运行状态，说明信息统一收纳到这里。</p>
           </div>
         </div>
         <div class="note-group">
           <span class="action-chip">流程编排</span>
-          <span class="action-chip">异步识图</span>
-          <span class="action-chip">共享变量</span>
+          <span class="action-chip">后台识图</span>
+          <span class="action-chip">共享数据</span>
           <span class="action-chip">主题切换</span>
         </div>
       </article>
       <article class="workflow-card workspace-panel">
         <div class="panel-head compact">
           <div>
-            <div class="eyebrow">Architecture</div>
             <h4>架构约定</h4>
           </div>
         </div>
@@ -2375,14 +3011,13 @@ function renderAboutPanel() {
       <article class="workflow-card workspace-panel">
         <div class="panel-head compact">
           <div>
-            <div class="eyebrow">Config</div>
             <h4>配置位置</h4>
           </div>
         </div>
         <ul class="guide-list">
           <li>流程编排数据保存在 <code>data/config.json</code> 的 <code>custom_workflows.flows</code>。</li>
-          <li>异步识图配置保存在 <code>data/config.json</code> 的 <code>async_vision.monitors</code>。</li>
-          <li>上传的模板图会写入 <code>assets/templates</code>，流程与异步识图都可复用。</li>
+          <li>后台识图配置保存在 <code>data/config.json</code> 的 <code>async_vision.monitors</code>。</li>
+          <li>上传的模板图会写入 <code>assets/templates</code>，流程与后台识图都可复用。</li>
         </ul>
       </article>
     </div>
@@ -2397,7 +3032,7 @@ function renderAsyncMonitorCard(monitor) {
       <div class="workflow-top">
         <div>
           <div class="badge-row">
-            <span class="source-badge custom">异步识图</span>
+            <span class="source-badge custom">后台识图</span>
             <span class="category-badge">${escapeHtml(asyncMonitorPresetLabel(monitor.preset))}</span>
             <span class="source-badge ${monitor.enabled ? 'trigger' : 'loop'}">${monitor.enabled ? '启用' : '停用'}</span>
           </div>
@@ -2407,7 +3042,7 @@ function renderAsyncMonitorCard(monitor) {
         <span class="runtime-badge ${escapeHtml(asyncMonitorStatusClass(status))}">${escapeHtml(asyncMonitorStatusLabel(status))}</span>
       </div>
       <div class="action-group">
-        <span class="action-chip">变量：${escapeHtml(monitor.output_variable ?? 'target')}</span>
+        <span class="action-chip">结果：${escapeHtml(monitor.output_variable ?? 'target')}</span>
         <span class="action-chip">${escapeHtml(asyncSearchScopeLabel(monitor.search_scope))}</span>
         <span class="action-chip">${escapeHtml(asyncScanRateLabel(monitor.scan_rate))}</span>
       </div>
@@ -2432,7 +3067,7 @@ function renderSharedVariablePanel() {
     ? `<div class="activity-list">${items.map((item) => {
         const meta = item._shared ?? {};
         const status = String(meta.status ?? 'idle');
-        const point = item.found ? `(${item.x ?? '--'}, ${item.y ?? '--'})` : '未命中';
+        const point = item.found ? `(${item.x ?? '--'}, ${item.y ?? '--'})` : '没找到';
         return `
           <article class="activity-item">
             <header>
@@ -2444,17 +3079,17 @@ function renderSharedVariablePanel() {
           </article>
         `;
       }).join('')}</div>`
-    : '<div class="empty-state">暂无共享变量。保存并启用识别后会显示在这里。</div>';
+    : '<div class="empty-state">暂无共享数据。保存并启用识别后会显示在这里。</div>';
 
   return `
     <article class="workflow-card">
       <div class="workflow-top">
         <div>
           <div class="badge-row">
-            <span class="source-badge custom">共享变量</span>
+            <span class="source-badge custom">共享数据</span>
           </div>
-          <h4>异步识图输出</h4>
-          <p>流程中的点击和分支步骤可以直接读取这些共享变量。</p>
+          <h4>后台识图输出</h4>
+          <p>流程中的点击和分支步骤可以直接读取这些共享数据。</p>
         </div>
       </div>
       ${body}
@@ -2466,7 +3101,7 @@ function renderAsyncMonitorList() {
   const monitors = Array.isArray(state.asyncVision.monitors) ? state.asyncVision.monitors : [];
   return monitors.length
     ? `<div class="workflow-grid workflow-grid-page">${monitors.map(renderAsyncMonitorCard).join('')}</div>`
-    : '<div class="empty-state">当前还没有异步识图，先保存一个开始后台识图。</div>';
+    : '<div class="empty-state">当前还没有后台识图，先保存一个开始后台识图。</div>';
 }
 
 function refreshAsyncVisionRuntimePanels() {
@@ -2522,7 +3157,7 @@ async function saveAsyncMonitor() {
     return;
   }
   if (!payload.output_variable) {
-    window.alert('请先填写保存变量。');
+    window.alert('请先填写结果名称。');
     return;
   }
   if (!payload.template_path) {
@@ -2538,7 +3173,7 @@ async function saveAsyncMonitor() {
     } else {
       resetAsyncMonitorEditor();
     }
-    showToast(isEditingExisting ? '异步识图已更新。' : '异步识图已保存，可继续新建下一条。', 'success');
+    showToast(isEditingExisting ? '后台识图已更新。' : '后台识图已保存，可继续新建下一条。', 'success');
   } catch (error) {
     window.alert(`保存识别失败：${error}`);
   }
@@ -2555,7 +3190,7 @@ async function deleteAsyncMonitor(monitorId) {
     return;
   }
 
-  if (!window.confirm(`确认删除异步识图「${monitor.name}」吗？`)) {
+  if (!window.confirm(`确认删除后台识图「${monitor.name}」吗？`)) {
     return;
   }
 
@@ -2564,7 +3199,7 @@ async function deleteAsyncMonitor(monitorId) {
     state.asyncVision.editor = createEmptyAsyncMonitor();
   }
   await loadBootstrap();
-  showToast('异步识图已删除。', 'success');
+  showToast('后台识图已删除。', 'success');
 }
 
 function renderWorkflows() {
@@ -2573,12 +3208,7 @@ function renderWorkflows() {
     return;
   }
 
-  const editorOnly = state.activeTab === 'editor';
-  container.hidden = editorOnly;
-  if (editorOnly) {
-    container.innerHTML = '';
-    return;
-  }
+  container.hidden = false;
 
   if (state.activeTab === 'async_vision') {
     container.innerHTML = renderAsyncVisionWorkspace();
@@ -2735,6 +3365,16 @@ function updateFlowSearch(value) {
 
 function updateFlowFilter(value) {
   state.flowFilter = String(value ?? 'all');
+  renderWorkflows();
+}
+
+function updateFlowSort(value) {
+  state.flowSort = String(value ?? 'name');
+  renderWorkflows();
+}
+
+function toggleFlowViewMode() {
+  state.flowViewMode = state.flowViewMode === 'card' ? 'list' : 'card';
   renderWorkflows();
 }
 
@@ -2960,6 +3600,8 @@ window.addDesignerStep = addDesignerStep;
 window.removeDesignerStep = removeDesignerStep;
 window.moveDesignerStep = moveDesignerStep;
 window.changeDesignerStepKind = changeDesignerStepKind;
+window.toggleStepCollapse = toggleStepCollapse;
+window.duplicateDesignerStep = duplicateDesignerStep;
 window.updateStepField = updateStepField;
 window.updateStepCheckbox = updateStepCheckbox;
 window.toggleStepModifier = toggleStepModifier;
@@ -2982,7 +3624,18 @@ window.deleteAsyncMonitor = deleteAsyncMonitor;
 window.deleteCustomWorkflow = deleteCustomWorkflow;
 window.updateFlowSearch = updateFlowSearch;
 window.updateFlowFilter = updateFlowFilter;
+window.updateFlowSort = updateFlowSort;
+window.toggleFlowViewMode = toggleFlowViewMode;
 window.setTheme = setTheme;
+
+function toggleBottomPanel(panelId) {
+  const panel = document.getElementById(panelId);
+  if (!panel) {
+    return;
+  }
+  panel.classList.toggle('panel-collapsed');
+}
+window.toggleBottomPanel = toggleBottomPanel;
 
 window.addEventListener('pywebviewready', initializeApp);
 window.addEventListener('beforeunload', () => callCaptureApi('end_key_capture'));

@@ -148,10 +148,15 @@ class _INPUT(ctypes.Structure):
 
 
 class WindowsInputController:
-    MOUSEEVENTF_LEFTDOWN  = 0x0002
-    MOUSEEVENTF_LEFTUP    = 0x0004
-    MOUSEEVENTF_RIGHTDOWN = 0x0008
-    MOUSEEVENTF_RIGHTUP   = 0x0010
+    MOUSEEVENTF_LEFTDOWN   = 0x0002
+    MOUSEEVENTF_LEFTUP     = 0x0004
+    MOUSEEVENTF_RIGHTDOWN  = 0x0008
+    MOUSEEVENTF_RIGHTUP    = 0x0010
+    MOUSEEVENTF_MIDDLEDOWN = 0x0020
+    MOUSEEVENTF_MIDDLEUP   = 0x0040
+    MOUSEEVENTF_WHEEL      = 0x0800
+    MOUSEEVENTF_HWHEEL     = 0x1000
+    WHEEL_DELTA            = 120
 
     def __init__(self) -> None:
         self._user32 = ctypes.windll.user32
@@ -213,6 +218,7 @@ class WindowsInputController:
         return_cursor: bool = False,
         modifiers: list[str] | None = None,
         modifier_delay_ms: int = 50,
+        click_count: int = 1,
     ) -> None:
         original_position = self.get_cursor_position() if return_cursor else None
         self.set_cursor_position(target_position)
@@ -225,7 +231,8 @@ class WindowsInputController:
                 pressed_modifiers.append(mod)
             if pressed_modifiers:
                 time.sleep(max(modifier_delay_ms, 0) / 1000)
-            self._mouse_click(button)
+            for _ in range(max(1, click_count)):
+                self._mouse_click(button)
             if pressed_modifiers:
                 time.sleep(max(modifier_delay_ms, 0) / 1000)
         finally:
@@ -248,6 +255,46 @@ class WindowsInputController:
             settle_ms=settle_ms,
             return_cursor=True,
         )
+
+    def scroll(self, clicks: int = 3, direction: str = "down") -> None:
+        """模拟鼠标滚轮。clicks 为滚动格数，direction 为 up/down/left/right。"""
+        if clicks <= 0:
+            return
+        if direction in ("up", "down"):
+            flag = self.MOUSEEVENTF_WHEEL
+            delta = self.WHEEL_DELTA * clicks * (1 if direction == "up" else -1)
+        else:
+            flag = self.MOUSEEVENTF_HWHEEL
+            delta = self.WHEEL_DELTA * clicks * (1 if direction == "right" else -1)
+        inp = (_INPUT * 1)()
+        inp[0].type = _INPUT_MOUSE
+        inp[0].union.mi.mouseData = ctypes.c_ulong(delta & 0xFFFFFFFF)
+        inp[0].union.mi.dwFlags = flag
+        self._user32.SendInput(1, inp, ctypes.sizeof(_INPUT))
+
+    def mouse_down(self, button: str = "left") -> None:
+        """按下鼠标按键不释放。"""
+        flags = {
+            "left": self.MOUSEEVENTF_LEFTDOWN,
+            "right": self.MOUSEEVENTF_RIGHTDOWN,
+            "middle": self.MOUSEEVENTF_MIDDLEDOWN,
+        }.get(button, self.MOUSEEVENTF_LEFTDOWN)
+        inp = (_INPUT * 1)()
+        inp[0].type = _INPUT_MOUSE
+        inp[0].union.mi.dwFlags = flags
+        self._user32.SendInput(1, inp, ctypes.sizeof(_INPUT))
+
+    def mouse_up(self, button: str = "left") -> None:
+        """释放鼠标按键。"""
+        flags = {
+            "left": self.MOUSEEVENTF_LEFTUP,
+            "right": self.MOUSEEVENTF_RIGHTUP,
+            "middle": self.MOUSEEVENTF_MIDDLEUP,
+        }.get(button, self.MOUSEEVENTF_LEFTUP)
+        inp = (_INPUT * 1)()
+        inp[0].type = _INPUT_MOUSE
+        inp[0].union.mi.dwFlags = flags
+        self._user32.SendInput(1, inp, ctypes.sizeof(_INPUT))
 
     def press_combo(self, keys: str) -> None:
         parts = [p.strip().lower() for p in keys.split("+")]
@@ -273,3 +320,50 @@ class WindowsInputController:
             inputs[n + i].union.ki.wScan = scan
             inputs[n + i].union.ki.dwFlags = flags
         self._user32.SendInput(n * 2, inputs, ctypes.sizeof(_INPUT))
+
+    def drag(
+        self,
+        start: tuple[int, int],
+        end: tuple[int, int],
+        button: str = "left",
+        duration_ms: int = 300,
+        steps: int = 20,
+    ) -> None:
+        """从 start 拖拽到 end，平滑移动。"""
+        self.set_cursor_position(start)
+        time.sleep(0.05)
+        self.mouse_down(button)
+        time.sleep(0.05)
+        sx, sy = start
+        ex, ey = end
+        actual_steps = max(1, steps)
+        step_delay = max(duration_ms, 0) / 1000 / actual_steps
+        for i in range(1, actual_steps + 1):
+            t = i / actual_steps
+            cx = int(sx + (ex - sx) * t)
+            cy = int(sy + (ey - sy) * t)
+            self.set_cursor_position((cx, cy))
+            time.sleep(step_delay)
+        self.mouse_up(button)
+
+    def type_text(self, text: str, interval_ms: int = 50) -> None:
+        """逐字符输入文本，使用 SendInput 的 UNICODE 模式。"""
+        delay = max(interval_ms, 0) / 1000
+        for ch in text:
+            code = ord(ch)
+            # key down
+            inp_down = (_INPUT * 1)()
+            inp_down[0].type = _INPUT_KEYBOARD
+            inp_down[0].union.ki.wVk = 0
+            inp_down[0].union.ki.wScan = code
+            inp_down[0].union.ki.dwFlags = 0x0004  # KEYEVENTF_UNICODE
+            self._user32.SendInput(1, inp_down, ctypes.sizeof(_INPUT))
+            # key up
+            inp_up = (_INPUT * 1)()
+            inp_up[0].type = _INPUT_KEYBOARD
+            inp_up[0].union.ki.wVk = 0
+            inp_up[0].union.ki.wScan = code
+            inp_up[0].union.ki.dwFlags = 0x0004 | 0x0002  # UNICODE | KEYUP
+            self._user32.SendInput(1, inp_up, ctypes.sizeof(_INPUT))
+            if delay > 0:
+                time.sleep(delay)
