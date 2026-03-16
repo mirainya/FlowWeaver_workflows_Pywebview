@@ -7,6 +7,9 @@ from threading import Event, Lock, Thread
 from typing import Any, Callable
 
 from app.services.vision import SharedScreenCapture, TemplateMatcher
+from app.services.pixel_checker import PixelChecker
+from app.services.color_detector import ColorRegionDetector
+from app.services.feature_matcher import FeatureMatcher
 
 
 PRESET_DEFAULTS: dict[str, dict[str, Any]] = {
@@ -80,6 +83,11 @@ ALLOWED_SEARCH_SCOPES = {"full_screen", "fixed_region", "follow_last"}
 ALLOWED_SCAN_RATES = {"low", "normal", "high", "ultra"}
 ALLOWED_NOT_FOUND_ACTIONS = {"keep_last", "mark_missing"}
 ALLOWED_MATCH_MODES = {"loose", "normal", "strict", "custom"}
+ALLOWED_MATCH_TYPES = {"template", "check_pixels", "check_region_color", "detect_color_region", "match_fingerprint"}
+
+
+class _MonitorConfigError(Exception):
+    """监控配置错误，不计入连续异常但会显示状态。"""
 
 
 def _clamp_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -125,6 +133,70 @@ def _effective_interval_ms(monitor: dict[str, Any]) -> int:
     return SCAN_RATE_INTERVAL_MS.get(str(monitor.get("scan_rate", "normal")), 350)
 
 
+def _sanitize_pixel_points(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    points: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        points.append({
+            "x": _clamp_int(item.get("x", 0), 0, 0, 100000),
+            "y": _clamp_int(item.get("y", 0), 0, 0, 100000),
+            "expected_color": str(item.get("expected_color", "")).strip(),
+            "tolerance": _clamp_int(item.get("tolerance", 20), 20, 0, 255),
+        })
+    return points
+
+
+def _sanitize_region_color_config(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "left": _clamp_int(raw.get("left", 0), 0, 0, 100000),
+        "top": _clamp_int(raw.get("top", 0), 0, 0, 100000),
+        "width": _clamp_int(raw.get("width", 100), 100, 1, 100000),
+        "height": _clamp_int(raw.get("height", 100), 100, 1, 100000),
+        "expected_color": str(raw.get("expected_color", "#FF0000")).strip(),
+        "tolerance": _clamp_int(raw.get("tolerance", 20), 20, 0, 255),
+        "min_ratio": _clamp_float(raw.get("min_ratio", 0.5), 0.5, 0.01, 1.0),
+    }
+
+
+def _sanitize_hsv_config(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "h_min": _clamp_int(raw.get("h_min", 0), 0, 0, 179),
+        "h_max": _clamp_int(raw.get("h_max", 179), 179, 0, 179),
+        "s_min": _clamp_int(raw.get("s_min", 50), 50, 0, 255),
+        "s_max": _clamp_int(raw.get("s_max", 255), 255, 0, 255),
+        "v_min": _clamp_int(raw.get("v_min", 50), 50, 0, 255),
+        "v_max": _clamp_int(raw.get("v_max", 255), 255, 0, 255),
+        "min_area": _clamp_int(raw.get("min_area", 100), 100, 1, 1000000),
+    }
+
+
+def _sanitize_fingerprint_config(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raw = {}
+    sample_points: list[dict[str, Any]] = []
+    for item in (raw.get("sample_points") or []):
+        if not isinstance(item, dict):
+            continue
+        sample_points.append({
+            "dx": _clamp_int(item.get("dx", 0), 0, -100000, 100000),
+            "dy": _clamp_int(item.get("dy", 0), 0, -100000, 100000),
+            "expected_color": str(item.get("expected_color", "")).strip(),
+        })
+    return {
+        "anchor_x": _clamp_int(raw.get("anchor_x", 0), 0, 0, 100000),
+        "anchor_y": _clamp_int(raw.get("anchor_y", 0), 0, 0, 100000),
+        "tolerance": _clamp_int(raw.get("tolerance", 20), 20, 0, 255),
+        "sample_points": sample_points,
+    }
+
+
 def sanitize_async_monitor_record(raw_record: Any) -> dict[str, Any] | None:
     if not isinstance(raw_record, dict):
         return None
@@ -150,6 +222,18 @@ def sanitize_async_monitor_record(raw_record: Any) -> dict[str, Any] | None:
     recover_after_misses = _clamp_int(raw_record.get("recover_after_misses", defaults["recover_after_misses"]), defaults["recover_after_misses"], 1, 30)
     stale_after_ms = _clamp_int(raw_record.get("stale_after_ms", defaults["stale_after_ms"]), defaults["stale_after_ms"], 100, 600000)
 
+    match_type = _resolve_enum(raw_record.get("match_type", "template"), ALLOWED_MATCH_TYPES, "template")
+
+    # ── match-type-specific config ──
+    pixel_points = _sanitize_pixel_points(raw_record.get("pixel_points"))
+    pixel_logic = _resolve_enum(raw_record.get("pixel_logic", "all"), {"all", "any"}, "all")
+
+    region_color_config = _sanitize_region_color_config(raw_record.get("region_color_config"))
+
+    hsv_config = _sanitize_hsv_config(raw_record.get("hsv_config"))
+
+    fingerprint_config = _sanitize_fingerprint_config(raw_record.get("fingerprint_config"))
+
     return {
         "monitor_id": monitor_id,
         "name": name,
@@ -157,6 +241,7 @@ def sanitize_async_monitor_record(raw_record: Any) -> dict[str, Any] | None:
         "template_path": template_path,
         "enabled": bool(raw_record.get("enabled", True)),
         "preset": preset,
+        "match_type": match_type,
         "search_scope": search_scope,
         "fixed_region": fixed_region,
         "scan_rate": scan_rate,
@@ -166,6 +251,11 @@ def sanitize_async_monitor_record(raw_record: Any) -> dict[str, Any] | None:
         "follow_radius": follow_radius,
         "recover_after_misses": recover_after_misses,
         "stale_after_ms": stale_after_ms,
+        "pixel_points": pixel_points,
+        "pixel_logic": pixel_logic,
+        "region_color_config": region_color_config,
+        "hsv_config": hsv_config,
+        "fingerprint_config": fingerprint_config,
         "effective_confidence": _effective_confidence(
             {
                 "match_mode": match_mode,
@@ -397,6 +487,9 @@ class AsyncVisionManager:
         logger: Callable[[str, str], None],
         shared_capture: SharedScreenCapture | None = None,
         max_threads: int = 8,
+        pixel_checker: PixelChecker | None = None,
+        color_detector: ColorRegionDetector | None = None,
+        feature_matcher: FeatureMatcher | None = None,
     ) -> None:
         self._project_root = project_root
         self._logger = logger
@@ -414,6 +507,9 @@ class AsyncVisionManager:
         else:
             self._shared_capture = SharedScreenCapture()
             self._owns_capture = True
+        self._pixel_checker = pixel_checker
+        self._color_detector = color_detector
+        self._feature_matcher = feature_matcher
 
     def shutdown(self) -> None:
         self._stop_all.set()
@@ -526,6 +622,7 @@ class AsyncVisionManager:
             "template_path": str(monitor.get("template_path", "")),
             "enabled": bool(monitor.get("enabled", True)),
             "preset": str(monitor.get("preset", "fixed_button")),
+            "match_type": str(monitor.get("match_type", "template")),
             "search_scope": str(monitor.get("search_scope", "full_screen")),
             "fixed_region": deepcopy(monitor.get("fixed_region", {})),
             "scan_rate": str(monitor.get("scan_rate", "normal")),
@@ -535,6 +632,11 @@ class AsyncVisionManager:
             "follow_radius": int(monitor.get("follow_radius", 220)),
             "recover_after_misses": int(monitor.get("recover_after_misses", 2)),
             "stale_after_ms": int(monitor.get("stale_after_ms", 1200)),
+            "pixel_points": deepcopy(monitor.get("pixel_points", [])),
+            "pixel_logic": str(monitor.get("pixel_logic", "all")),
+            "region_color_config": deepcopy(monitor.get("region_color_config", {})),
+            "hsv_config": deepcopy(monitor.get("hsv_config", {})),
+            "fingerprint_config": deepcopy(monitor.get("fingerprint_config", {})),
         }
 
     def _resolve_template_path(self, raw_path: str) -> Path:
@@ -647,9 +749,7 @@ class AsyncVisionManager:
                     monitor = self._monitors.get(monitor_id)
                     if not monitor or not monitor.get("enabled"):
                         break
-                    # 浅拷贝 monitor 配置（dict 内无嵌套可变结构需要保护）
                     monitor = dict(monitor)
-                    # fixed_region 是嵌套 dict，需要单独拷贝
                     fr = monitor.get("fixed_region")
                     if isinstance(fr, dict):
                         monitor["fixed_region"] = dict(fr)
@@ -661,86 +761,74 @@ class AsyncVisionManager:
                     break
 
                 cycle_started = time.monotonic()
-                template_path = self._resolve_template_path(str(monitor.get("template_path", "")))
                 search_region, active_scope = self._resolve_search_plan(monitor, runtime)
                 miss_count = int(runtime.get("miss_count", 0))
                 last_hit_at = runtime.get("last_hit_at")
+                match_type = str(monitor.get("match_type", "template"))
 
-                if not str(monitor.get("template_path", "")).strip():
+                try:
+                    result = self._dispatch_match(match_type, monitor, matcher, search_region, stop_event)
+                    consecutive_errors = 0
+                except _MonitorConfigError as exc:
                     consecutive_errors += 1
-                    self._set_status(monitor, "error", "缺少模板图片。", active_scope=active_scope, search_region=search_region, miss_count=miss_count, last_hit_at=last_hit_at)
-                elif not template_path.exists():
+                    self._set_status(monitor, "error", str(exc), active_scope=active_scope, search_region=search_region, miss_count=miss_count, last_hit_at=last_hit_at)
+                except Exception as exc:
                     consecutive_errors += 1
-                    self._set_status(monitor, "error", f"模板图片不存在：{template_path.name}", active_scope=active_scope, search_region=search_region, miss_count=miss_count, last_hit_at=last_hit_at)
+                    message = f"异步识图失败：{monitor.get('name')} · {exc}"
+                    self._logger(message, "error")
+                    self._set_status(monitor, "error", message, active_scope=active_scope, search_region=search_region, miss_count=miss_count, last_hit_at=last_hit_at)
                 else:
-                    try:
-                        result = matcher.locate_on_screen_details(
-                            template_path=template_path,
-                            confidence=_effective_confidence(monitor),
-                            timeout_ms=100,
-                            search_step=4,
-                            search_region=search_region,
-                            capture_once=True,
-                            stop_event=stop_event,
+                    if result is not None and result.get("found"):
+                        now = time.time()
+                        payload = self._store.apply_result(
+                            monitor,
+                            result,
+                            status="hit",
+                            message=self._hit_message(match_type, monitor, result),
+                            runtime_meta={
+                                "updated_at": now,
+                                "miss_count": 0,
+                                "active_scope": active_scope,
+                                "search_region": search_region,
+                                "last_hit_at": now,
+                            },
                         )
-                        consecutive_errors = 0
-                    except Exception as exc:
-                        consecutive_errors += 1
-                        message = f"异步识图失败：{monitor.get('name')} · {exc}"
-                        self._logger(message, "error")
-                        self._set_status(monitor, "error", message, active_scope=active_scope, search_region=search_region, miss_count=miss_count, last_hit_at=last_hit_at)
+                        self._set_status(
+                            monitor,
+                            "hit",
+                            f"已找到：({payload.get('x', '?')}, {payload.get('y', '?')})",
+                            miss_count=0,
+                            active_scope=active_scope,
+                            search_region=search_region,
+                            last_hit_at=now,
+                        )
                     else:
-                        if result is not None and result.get("found"):
-                            now = time.time()
-                            payload = self._store.apply_result(
-                                monitor,
-                                result,
-                                status="hit",
-                                message=f"命中 {template_path.name}",
-                                runtime_meta={
-                                    "updated_at": now,
-                                    "miss_count": 0,
-                                    "active_scope": active_scope,
-                                    "search_region": search_region,
-                                    "last_hit_at": now,
-                                },
-                            )
-                            self._set_status(
-                                monitor,
-                                "hit",
-                                f"已找到：({payload.get('x')}, {payload.get('y')})",
-                                miss_count=0,
-                                active_scope=active_scope,
-                                search_region=search_region,
-                                last_hit_at=now,
-                            )
-                        else:
-                            miss_count += 1
-                            now = time.time()
-                            not_found_action = str(monitor.get("not_found_action", "keep_last"))
-                            miss_message = "本轮未找到，保留上次结果。" if not_found_action == "keep_last" else "本轮未找到，已标记为未找到。"
-                            self._store.apply_result(
-                                monitor,
-                                None,
-                                status="miss",
-                                message=miss_message,
-                                runtime_meta={
-                                    "updated_at": now,
-                                    "miss_count": miss_count,
-                                    "active_scope": active_scope,
-                                    "search_region": search_region,
-                                    "last_hit_at": last_hit_at,
-                                },
-                            )
-                            self._set_status(
-                                monitor,
-                                "miss",
-                                miss_message,
-                                miss_count=miss_count,
-                                active_scope=active_scope,
-                                search_region=search_region,
-                                last_hit_at=last_hit_at,
-                            )
+                        miss_count += 1
+                        now = time.time()
+                        not_found_action = str(monitor.get("not_found_action", "keep_last"))
+                        miss_message = "本轮未找到，保留上次结果。" if not_found_action == "keep_last" else "本轮未找到，已标记为未找到。"
+                        self._store.apply_result(
+                            monitor,
+                            None,
+                            status="miss",
+                            message=miss_message,
+                            runtime_meta={
+                                "updated_at": now,
+                                "miss_count": miss_count,
+                                "active_scope": active_scope,
+                                "search_region": search_region,
+                                "last_hit_at": last_hit_at,
+                            },
+                        )
+                        self._set_status(
+                            monitor,
+                            "miss",
+                            miss_message,
+                            miss_count=miss_count,
+                            active_scope=active_scope,
+                            search_region=search_region,
+                            last_hit_at=last_hit_at,
+                        )
 
                 elapsed_ms = int((time.monotonic() - cycle_started) * 1000)
                 interval_ms = _effective_interval_ms(monitor)
@@ -756,3 +844,112 @@ class AsyncVisionManager:
                     break
         finally:
             matcher.close()
+
+    def _dispatch_match(
+        self,
+        match_type: str,
+        monitor: dict[str, Any],
+        matcher: TemplateMatcher,
+        search_region: dict[str, int] | None,
+        stop_event: Event,
+    ) -> dict[str, Any] | None:
+        if match_type == "check_pixels":
+            return self._match_check_pixels(monitor)
+        if match_type == "check_region_color":
+            return self._match_check_region_color(monitor)
+        if match_type == "detect_color_region":
+            return self._match_detect_color_region(monitor, search_region)
+        if match_type == "match_fingerprint":
+            return self._match_fingerprint(monitor)
+        return self._match_template(monitor, matcher, search_region, stop_event)
+
+    def _match_template(
+        self,
+        monitor: dict[str, Any],
+        matcher: TemplateMatcher,
+        search_region: dict[str, int] | None,
+        stop_event: Event,
+    ) -> dict[str, Any] | None:
+        template_path_str = str(monitor.get("template_path", "")).strip()
+        if not template_path_str:
+            raise _MonitorConfigError("缺少模板图片。")
+        template_path = self._resolve_template_path(template_path_str)
+        if not template_path.exists():
+            raise _MonitorConfigError(f"模板图片不存在：{template_path.name}")
+        return matcher.locate_on_screen_details(
+            template_path=template_path,
+            confidence=_effective_confidence(monitor),
+            timeout_ms=100,
+            search_step=4,
+            search_region=search_region,
+            capture_once=True,
+            stop_event=stop_event,
+        )
+
+    def _match_check_pixels(self, monitor: dict[str, Any]) -> dict[str, Any]:
+        if self._pixel_checker is None:
+            raise _MonitorConfigError("像素检测服务未初始化。")
+        points = monitor.get("pixel_points", [])
+        if not points:
+            raise _MonitorConfigError("缺少像素检测点配置。")
+        logic = str(monitor.get("pixel_logic", "all"))
+        return self._pixel_checker.check_pixels(points, logic=logic)
+
+    def _match_check_region_color(self, monitor: dict[str, Any]) -> dict[str, Any]:
+        if self._pixel_checker is None:
+            raise _MonitorConfigError("像素检测服务未初始化。")
+        cfg = monitor.get("region_color_config", {})
+        return self._pixel_checker.check_region_color(
+            left=int(cfg.get("left", 0)),
+            top=int(cfg.get("top", 0)),
+            width=int(cfg.get("width", 100)),
+            height=int(cfg.get("height", 100)),
+            expected_color=str(cfg.get("expected_color", "#FF0000")),
+            tolerance=int(cfg.get("tolerance", 20)),
+            min_ratio=float(cfg.get("min_ratio", 0.5)),
+        )
+
+    def _match_detect_color_region(self, monitor: dict[str, Any], search_region: dict[str, int] | None) -> dict[str, Any]:
+        if self._color_detector is None:
+            raise _MonitorConfigError("颜色区域检测服务未初始化。")
+        cfg = monitor.get("hsv_config", {})
+        return self._color_detector.detect(
+            h_min=int(cfg.get("h_min", 0)),
+            h_max=int(cfg.get("h_max", 179)),
+            s_min=int(cfg.get("s_min", 50)),
+            s_max=int(cfg.get("s_max", 255)),
+            v_min=int(cfg.get("v_min", 50)),
+            v_max=int(cfg.get("v_max", 255)),
+            region=search_region,
+            min_area=int(cfg.get("min_area", 100)),
+        )
+
+    def _match_fingerprint(self, monitor: dict[str, Any]) -> dict[str, Any]:
+        if self._feature_matcher is None:
+            raise _MonitorConfigError("特征指纹匹配服务未初始化。")
+        cfg = monitor.get("fingerprint_config", {})
+        sample_points = cfg.get("sample_points", [])
+        if not sample_points:
+            raise _MonitorConfigError("缺少特征指纹采样点配置。")
+        return self._feature_matcher.match(
+            anchor_x=int(cfg.get("anchor_x", 0)),
+            anchor_y=int(cfg.get("anchor_y", 0)),
+            sample_points=sample_points,
+            tolerance=int(cfg.get("tolerance", 20)),
+        )
+
+    @staticmethod
+    def _hit_message(match_type: str, monitor: dict[str, Any], result: dict[str, Any]) -> str:
+        if match_type == "template":
+            tpl = str(monitor.get("template_path", ""))
+            name = Path(tpl).name if tpl else "模板"
+            return f"命中 {name}"
+        if match_type == "check_pixels":
+            return f"像素匹配 {result.get('match_count', 0)}/{result.get('total', 0)}"
+        if match_type == "check_region_color":
+            return f"区域颜色占比 {result.get('ratio', 0):.1%}"
+        if match_type == "detect_color_region":
+            return f"HSV区域 {result.get('count', 0)} 个"
+        if match_type == "match_fingerprint":
+            return f"指纹匹配 {result.get('match_count', 0)}/{result.get('total', 0)}"
+        return "命中"

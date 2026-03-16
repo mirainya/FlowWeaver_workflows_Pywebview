@@ -98,6 +98,18 @@ function createDefaultStep(kind = 'key_tap') {
   if (kind === 'set_variable') {
     return { kind: 'set_variable', var_name: 'target', field: 'found', value: 'true' };
   }
+  if (kind === 'check_pixels') {
+    return { kind: 'check_pixels', points: [{ x: 0, y: 0, expected_color: '', tolerance: 20 }], logic: 'all', save_as: 'pixel_result' };
+  }
+  if (kind === 'check_region_color') {
+    return { kind: 'check_region_color', left: 0, top: 0, width: 100, height: 100, expected_color: '', tolerance: 20, min_ratio: 0.5, save_as: 'region_color_result' };
+  }
+  if (kind === 'detect_color_region') {
+    return { kind: 'detect_color_region', h_min: 0, h_max: 179, s_min: 50, s_max: 255, v_min: 50, v_max: 255, region_left: 0, region_top: 0, region_width: 0, region_height: 0, min_area: 100, save_as: 'color_region_result' };
+  }
+  if (kind === 'match_fingerprint') {
+    return { kind: 'match_fingerprint', anchor_x: 0, anchor_y: 0, sample_points: [], tolerance: 20, save_as: 'fingerprint_result' };
+  }
   return {
     kind: 'key_tap',
     keys: '',
@@ -333,6 +345,71 @@ function normalizeStep(rawStep) {
     };
   }
 
+  if (kind === 'check_pixels') {
+    const rawPoints = Array.isArray(step.points) ? step.points : [];
+    const points = rawPoints.map((pt) => ({
+      x: clampInt(pt?.x, 0),
+      y: clampInt(pt?.y, 0),
+      expected_color: String(pt?.expected_color ?? '').trim(),
+      tolerance: Math.max(0, Math.min(255, normalizeInt(pt?.tolerance, 20))),
+    }));
+    return {
+      kind: 'check_pixels',
+      points: points.length ? points : [{ x: 0, y: 0, expected_color: '', tolerance: 20 }],
+      logic: ['all', 'any'].includes(step.logic) ? step.logic : 'all',
+      save_as: String(step.save_as ?? 'pixel_result').trim() || 'pixel_result',
+    };
+  }
+
+  if (kind === 'check_region_color') {
+    return {
+      kind: 'check_region_color',
+      left: clampInt(step.left, 0),
+      top: clampInt(step.top, 0),
+      width: Math.max(1, normalizeInt(step.width, 100)),
+      height: Math.max(1, normalizeInt(step.height, 100)),
+      expected_color: String(step.expected_color ?? '').trim(),
+      tolerance: Math.max(0, Math.min(255, normalizeInt(step.tolerance, 20))),
+      min_ratio: Math.max(0.01, Math.min(1.0, normalizeFloat(step.min_ratio, 0.5))),
+      save_as: String(step.save_as ?? 'region_color_result').trim() || 'region_color_result',
+    };
+  }
+
+  if (kind === 'detect_color_region') {
+    return {
+      kind: 'detect_color_region',
+      h_min: Math.max(0, Math.min(179, normalizeInt(step.h_min, 0))),
+      h_max: Math.max(0, Math.min(179, normalizeInt(step.h_max, 179))),
+      s_min: Math.max(0, Math.min(255, normalizeInt(step.s_min, 50))),
+      s_max: Math.max(0, Math.min(255, normalizeInt(step.s_max, 255))),
+      v_min: Math.max(0, Math.min(255, normalizeInt(step.v_min, 50))),
+      v_max: Math.max(0, Math.min(255, normalizeInt(step.v_max, 255))),
+      region_left: clampInt(step.region_left, 0),
+      region_top: clampInt(step.region_top, 0),
+      region_width: Math.max(0, normalizeInt(step.region_width, 0)),
+      region_height: Math.max(0, normalizeInt(step.region_height, 0)),
+      min_area: Math.max(1, normalizeInt(step.min_area, 100)),
+      save_as: String(step.save_as ?? 'color_region_result').trim() || 'color_region_result',
+    };
+  }
+
+  if (kind === 'match_fingerprint') {
+    const rawSP = Array.isArray(step.sample_points) ? step.sample_points : [];
+    const samplePoints = rawSP.map((sp) => ({
+      dx: clampInt(sp?.dx, 0),
+      dy: clampInt(sp?.dy, 0),
+      expected_color: String(sp?.expected_color ?? '').trim(),
+    }));
+    return {
+      kind: 'match_fingerprint',
+      anchor_x: clampInt(step.anchor_x, 0),
+      anchor_y: clampInt(step.anchor_y, 0),
+      sample_points: samplePoints,
+      tolerance: Math.max(0, Math.min(255, normalizeInt(step.tolerance, 20))),
+      save_as: String(step.save_as ?? 'fingerprint_result').trim() || 'fingerprint_result',
+    };
+  }
+
   return {
     kind: 'key_tap',
     keys: String(step.keys ?? '').trim(),
@@ -368,6 +445,9 @@ function normalizeAsyncMonitor(rawMonitor) {
   const monitor = rawMonitor && typeof rawMonitor === 'object' ? rawMonitor : {};
   const presetKey = Object.prototype.hasOwnProperty.call(ASYNC_MONITOR_PRESETS, monitor.preset) ? monitor.preset : 'fixed_button';
   const preset = ASYNC_MONITOR_PRESETS[presetKey];
+  const matchType = ['template', 'check_pixels', 'check_region_color', 'detect_color_region', 'match_fingerprint'].includes(monitor.match_type)
+    ? monitor.match_type
+    : 'template';
   return {
     monitor_id: String(monitor.monitor_id ?? '').trim(),
     name: String(monitor.name ?? '').trim(),
@@ -375,6 +455,7 @@ function normalizeAsyncMonitor(rawMonitor) {
     template_path: String(monitor.template_path ?? '').trim(),
     enabled: Boolean(monitor.enabled ?? true),
     preset: presetKey,
+    match_type: matchType,
     search_scope: ['full_screen', 'fixed_region', 'follow_last'].includes(monitor.search_scope)
       ? monitor.search_scope
       : preset.search_scope,
@@ -399,6 +480,32 @@ function normalizeAsyncMonitor(rawMonitor) {
     stale_after_ms: Math.max(100, normalizeInt(monitor.stale_after_ms, preset.stale_after_ms)),
     effective_confidence: Math.max(0.55, Math.min(0.99, normalizeFloat(monitor.effective_confidence, monitor.custom_confidence ?? preset.custom_confidence))),
     effective_interval_ms: Math.max(30, normalizeInt(monitor.effective_interval_ms, 350)),
+    pixel_points: Array.isArray(monitor.pixel_points) ? monitor.pixel_points : [],
+    pixel_logic: ['all', 'any'].includes(monitor.pixel_logic) ? monitor.pixel_logic : 'all',
+    region_color_config: {
+      left: Math.max(0, normalizeInt(monitor.region_color_config?.left, 0)),
+      top: Math.max(0, normalizeInt(monitor.region_color_config?.top, 0)),
+      width: Math.max(1, normalizeInt(monitor.region_color_config?.width, 100)),
+      height: Math.max(1, normalizeInt(monitor.region_color_config?.height, 100)),
+      expected_color: String(monitor.region_color_config?.expected_color ?? '#FF0000').trim(),
+      tolerance: Math.max(0, normalizeInt(monitor.region_color_config?.tolerance, 20)),
+      min_ratio: Math.max(0.01, Math.min(1.0, normalizeFloat(monitor.region_color_config?.min_ratio, 0.5))),
+    },
+    hsv_config: {
+      h_min: Math.max(0, Math.min(179, normalizeInt(monitor.hsv_config?.h_min, 0))),
+      h_max: Math.max(0, Math.min(179, normalizeInt(monitor.hsv_config?.h_max, 179))),
+      s_min: Math.max(0, Math.min(255, normalizeInt(monitor.hsv_config?.s_min, 50))),
+      s_max: Math.max(0, Math.min(255, normalizeInt(monitor.hsv_config?.s_max, 255))),
+      v_min: Math.max(0, Math.min(255, normalizeInt(monitor.hsv_config?.v_min, 50))),
+      v_max: Math.max(0, Math.min(255, normalizeInt(monitor.hsv_config?.v_max, 255))),
+      min_area: Math.max(1, normalizeInt(monitor.hsv_config?.min_area, 100)),
+    },
+    fingerprint_config: {
+      anchor_x: Math.max(0, normalizeInt(monitor.fingerprint_config?.anchor_x, 0)),
+      anchor_y: Math.max(0, normalizeInt(monitor.fingerprint_config?.anchor_y, 0)),
+      tolerance: Math.max(0, normalizeInt(monitor.fingerprint_config?.tolerance, 20)),
+      sample_points: Array.isArray(monitor.fingerprint_config?.sample_points) ? monitor.fingerprint_config.sample_points : [],
+    },
     runtime: monitor.runtime ?? {},
   };
 }
@@ -466,7 +573,7 @@ function updateAsyncMonitorField(field, value, valueType = 'text') {
     return;
   }
   state.asyncVision.editor[field] = coerceValue(value, valueType);
-  if (['search_scope', 'match_mode'].includes(field)) {
+  if (['search_scope', 'match_mode', 'match_type'].includes(field)) {
     renderWorkflows();
   }
 }
@@ -480,6 +587,56 @@ function updateAsyncMonitorRegionField(field, value) {
   syncAsyncMonitorEditorFromDom();
   state.asyncVision.editor.fixed_region = state.asyncVision.editor.fixed_region ?? { left: 0, top: 0, width: 0, height: 0 };
   state.asyncVision.editor.fixed_region[field] = Math.max(0, normalizeInt(value, 0));
+}
+
+function updateAsyncMonitorNestedField(parentField, childField, value, valueType = 'text') {
+  syncAsyncMonitorEditorFromDom();
+  if (!state.asyncVision.editor[parentField] || typeof state.asyncVision.editor[parentField] !== 'object') {
+    state.asyncVision.editor[parentField] = {};
+  }
+  state.asyncVision.editor[parentField][childField] = coerceValue(value, valueType);
+}
+
+function updateAsyncMonitorJsonField(field, jsonStr) {
+  syncAsyncMonitorEditorFromDom();
+  try {
+    state.asyncVision.editor[field] = JSON.parse(jsonStr);
+  } catch (_) {
+    // 用户还在编辑中，暂不更新
+  }
+}
+
+function addAsyncPixelPoint() {
+  syncAsyncMonitorEditorFromDom();
+  if (!Array.isArray(state.asyncVision.editor.pixel_points)) {
+    state.asyncVision.editor.pixel_points = [];
+  }
+  state.asyncVision.editor.pixel_points.push({ x: 0, y: 0, expected_color: '#000000', tolerance: 20 });
+  renderWorkflows();
+}
+
+function addAsyncFingerprintSamplePoint() {
+  syncAsyncMonitorEditorFromDom();
+  if (!state.asyncVision.editor.fingerprint_config || typeof state.asyncVision.editor.fingerprint_config !== 'object') {
+    state.asyncVision.editor.fingerprint_config = { anchor_x: 0, anchor_y: 0, tolerance: 20, sample_points: [] };
+  }
+  if (!Array.isArray(state.asyncVision.editor.fingerprint_config.sample_points)) {
+    state.asyncVision.editor.fingerprint_config.sample_points = [];
+  }
+  state.asyncVision.editor.fingerprint_config.sample_points.push({ dx: 0, dy: 0, expected_color: '#000000' });
+  renderWorkflows();
+}
+
+function updateAsyncMonitorNestedJsonField(parentField, childField, jsonStr) {
+  syncAsyncMonitorEditorFromDom();
+  if (!state.asyncVision.editor[parentField] || typeof state.asyncVision.editor[parentField] !== 'object') {
+    state.asyncVision.editor[parentField] = {};
+  }
+  try {
+    state.asyncVision.editor[parentField][childField] = JSON.parse(jsonStr);
+  } catch (_) {
+    // 用户还在编辑中，暂不更新
+  }
 }
 
 function readAsyncEditorValue(elementId, fallback = '') {
@@ -531,6 +688,7 @@ function collectAsyncMonitorPayload() {
     template_path: String(currentEditor.template_path ?? '').trim(),
     enabled: Boolean(currentEditor.enabled ?? true),
     preset: editor.preset,
+    match_type: editor.match_type,
     search_scope: editor.search_scope,
     fixed_region: deepClone(editor.fixed_region),
     scan_rate: editor.scan_rate,
@@ -540,6 +698,11 @@ function collectAsyncMonitorPayload() {
     follow_radius: editor.follow_radius,
     recover_after_misses: editor.recover_after_misses,
     stale_after_ms: editor.stale_after_ms,
+    pixel_points: deepClone(editor.pixel_points),
+    pixel_logic: editor.pixel_logic,
+    region_color_config: deepClone(editor.region_color_config),
+    hsv_config: deepClone(editor.hsv_config),
+    fingerprint_config: deepClone(editor.fingerprint_config),
   };
 }
 

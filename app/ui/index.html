@@ -122,7 +122,13 @@
             <div>
               <h4>流程步骤</h4>
             </div>
-            <button class="ghost-button" type="button" id="designer-step-add">添加步骤</button>
+            <div class="step-toolbar-actions">
+              <div class="dropdown-wrap">
+                <button class="ghost-button" type="button" id="designer-template-insert">快速插入</button>
+                <div class="dropdown-menu" id="designer-template-menu" hidden></div>
+              </div>
+              <button class="ghost-button" type="button" id="designer-step-add">添加步骤</button>
+            </div>
           </div>
           <div class="step-index-map" id="designer-step-index" hidden></div>
           <div class="step-root" id="designer-step-list"></div>
@@ -163,6 +169,7 @@
   <script src="state.js"></script>
   <script src="capture.js"></script>
   <script src="models.js"></script>
+  <script src="capture-overlay.js"></script>
   <script src="designer.js"></script>
   <script src="render-designer.js"></script>
   <script src="render-flow.js"></script>

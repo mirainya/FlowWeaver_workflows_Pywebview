@@ -311,12 +311,193 @@ class TemplateMatcher:
             "height": int(height),
         }
 
-    def _match_template(self, screen_image: np.ndarray, loaded_template: LoadedTemplate) -> tuple[float, int, int]:
+    def _resolve_cv_method(self, method_name: str) -> int:
+        _METHOD_MAP = {
+            "ccorr_normed": cv2.TM_CCORR_NORMED,
+            "ccoeff_normed": cv2.TM_CCOEFF_NORMED,
+            "sqdiff_normed": cv2.TM_SQDIFF_NORMED,
+        }
+        return _METHOD_MAP.get(method_name, cv2.TM_CCORR_NORMED)
+
+    def _match_template(
+        self,
+        screen_image: np.ndarray,
+        loaded_template: LoadedTemplate,
+        match_method: str = "ccorr_normed",
+    ) -> tuple[float, int, int]:
+        cv_method = self._resolve_cv_method(match_method)
         result_map = cv2.matchTemplate(
             screen_image,
             loaded_template.image,
-            cv2.TM_CCORR_NORMED,
-            mask=loaded_template.mask,
+            cv_method,
+            mask=loaded_template.mask if cv_method != cv2.TM_CCOEFF_NORMED else None,
         )
+        if cv_method == cv2.TM_SQDIFF_NORMED:
+            min_val, _, min_loc, _ = cv2.minMaxLoc(result_map)
+            return float(1.0 - min_val), int(min_loc[0]), int(min_loc[1])
         _, max_score, _, max_location = cv2.minMaxLoc(result_map)
         return float(max_score), int(max_location[0]), int(max_location[1])
+
+    def locate_all_on_screen(
+        self,
+        template_path: Path,
+        confidence: float = 0.88,
+        search_region: dict[str, int] | None = None,
+        max_results: int = 20,
+        nms_overlap: float = 0.3,
+        match_method: str = "ccorr_normed",
+    ) -> list[dict[str, Any]]:
+        """单帧多目标匹配，返回所有满足阈值的匹配结果列表（已做 NMS 去重）。"""
+        self._ensure_opencv_available()
+        if not template_path.exists():
+            raise FileNotFoundError(f"Template file not found: {template_path}")
+
+        loaded = self._load_template(template_path)
+        threshold = max(min(float(confidence), 0.999), 0.55)
+        screen = self._capture_primary_screen()
+        h, w = screen.shape[:2]
+        norm_region = self._normalize_search_region(search_region, w, h)
+
+        region_left = int(norm_region["left"]) if norm_region else 0
+        region_top = int(norm_region["top"]) if norm_region else 0
+        region_w = int(norm_region["width"]) if norm_region else w
+        region_h = int(norm_region["height"]) if norm_region else h
+        region_img = screen[region_top:region_top + region_h, region_left:region_left + region_w]
+
+        if loaded.width > region_img.shape[1] or loaded.height > region_img.shape[0]:
+            return []
+
+        prepared = self._prepare_screen(region_img)
+        cv_method = self._resolve_cv_method(match_method)
+        result_map = cv2.matchTemplate(
+            prepared,
+            loaded.image,
+            cv_method,
+            mask=loaded.mask if cv_method != cv2.TM_CCOEFF_NORMED else None,
+        )
+
+        if cv_method == cv2.TM_SQDIFF_NORMED:
+            score_map = 1.0 - result_map
+        else:
+            score_map = result_map
+
+        locations = np.where(score_map >= threshold)
+        if len(locations[0]) == 0:
+            return []
+
+        scores = score_map[locations[0], locations[1]]
+        tw, th = loaded.width, loaded.height
+        boxes = np.array([
+            [int(x), int(y), int(x + tw), int(y + th)]
+            for y, x in zip(locations[0], locations[1])
+        ])
+
+        # NMS 去重
+        keep = self._nms(boxes, scores, nms_overlap)
+        results = []
+        for idx in keep[:max_results]:
+            bx, by = int(boxes[idx][0]), int(boxes[idx][1])
+            results.append({
+                "found": True,
+                "left": region_left + bx,
+                "top": region_top + by,
+                "width": tw,
+                "height": th,
+                "x": region_left + bx + tw // 2,
+                "y": region_top + by + th // 2,
+                "confidence": float(scores[idx]),
+                "template_path": str(template_path),
+            })
+        results.sort(key=lambda r: r["confidence"], reverse=True)
+        return results
+
+    @staticmethod
+    def _nms(boxes: np.ndarray, scores: np.ndarray, overlap_thresh: float) -> list[int]:
+        if len(boxes) == 0:
+            return []
+        x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+        areas = (x2 - x1) * (y2 - y1)
+        order = scores.argsort()[::-1]
+        keep: list[int] = []
+        while order.size > 0:
+            i = order[0]
+            keep.append(int(i))
+            xx1 = np.maximum(x1[i], x1[order[1:]])
+            yy1 = np.maximum(y1[i], y1[order[1:]])
+            xx2 = np.minimum(x2[i], x2[order[1:]])
+            yy2 = np.minimum(y2[i], y2[order[1:]])
+            inter = np.maximum(0, xx2 - xx1) * np.maximum(0, yy2 - yy1)
+            iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-6)
+            remaining = np.where(iou <= overlap_thresh)[0]
+            order = order[remaining + 1]
+        return keep
+
+    def test_template_match(
+        self,
+        template_path: Path,
+        confidence: float = 0.88,
+        search_region: dict[str, int] | None = None,
+    ) -> dict[str, Any]:
+        """单次匹配测试，返回匹配结果和标注后的截图 base64。"""
+        import base64 as _b64
+
+        self._ensure_opencv_available()
+        if not template_path.exists():
+            raise FileNotFoundError(f"模板文件不存在：{template_path}")
+
+        loaded = self._load_template(template_path)
+        screen = self._capture_primary_screen()
+        h, w = screen.shape[:2]
+        norm_region = self._normalize_search_region(search_region, w, h)
+
+        region_left = int(norm_region["left"]) if norm_region else 0
+        region_top = int(norm_region["top"]) if norm_region else 0
+        region_w = int(norm_region["width"]) if norm_region else w
+        region_h = int(norm_region["height"]) if norm_region else h
+        region_img = screen[region_top:region_top + region_h, region_left:region_left + region_w]
+
+        if loaded.width > region_img.shape[1] or loaded.height > region_img.shape[0]:
+            return {"found": False, "confidence": 0.0, "message": "模板比搜索区域大，无法匹配。"}
+
+        prepared = self._prepare_screen(region_img)
+        score, left, top = self._match_template(prepared, loaded)
+        threshold = max(min(float(confidence), 0.999), 0.55)
+        found = score >= threshold
+
+        # 在截图上画标注
+        annotated = screen.copy()
+        abs_left = region_left + left
+        abs_top = region_top + top
+        color = (52, 211, 153) if found else (113, 113, 248)  # BGR: green / red
+        cv2.rectangle(annotated, (abs_left, abs_top), (abs_left + loaded.width, abs_top + loaded.height), color, 2)
+        label = f"{score:.3f}"
+        cv2.putText(annotated, label, (abs_left, max(abs_top - 6, 14)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+
+        if norm_region:
+            cv2.rectangle(annotated, (region_left, region_top), (region_left + region_w, region_top + region_h), (250, 190, 60), 1)
+
+        # 裁剪到匹配点附近区域以减小传输量
+        pad = 120
+        crop_l = max(0, abs_left - pad)
+        crop_t = max(0, abs_top - pad)
+        crop_r = min(annotated.shape[1], abs_left + loaded.width + pad)
+        crop_b = min(annotated.shape[0], abs_top + loaded.height + pad)
+        crop_img = annotated[crop_t:crop_b, crop_l:crop_r]
+
+        ok, buf = cv2.imencode(".jpg", crop_img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        preview_url = ""
+        if ok:
+            preview_url = "data:image/jpeg;base64," + _b64.b64encode(buf.tobytes()).decode("ascii")
+
+        return {
+            "found": found,
+            "confidence": round(score, 4),
+            "x": int(region_left + left + loaded.width // 2) if found else 0,
+            "y": int(region_top + top + loaded.height // 2) if found else 0,
+            "left": abs_left,
+            "top": abs_top,
+            "width": loaded.width,
+            "height": loaded.height,
+            "preview_url": preview_url,
+            "message": f"匹配分数 {score:.4f}，阈值 {threshold:.2f}。{'已找到！' if found else '未达到阈值。'}",
+        }

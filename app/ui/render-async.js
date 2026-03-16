@@ -88,6 +88,7 @@ function renderAboutPanel() {
 function renderAsyncMonitorCard(monitor) {
   const runtime = monitor.runtime ?? {};
   const status = String(runtime.status ?? (monitor.enabled ? 'idle' : 'disabled'));
+  const matchType = monitor.match_type || 'template';
   return `
     <article class="workflow-card compact-card">
       <div class="workflow-top">
@@ -95,6 +96,7 @@ function renderAsyncMonitorCard(monitor) {
           <div class="badge-row">
             <span class="source-badge custom">后台识图</span>
             <span class="category-badge">${escapeHtml(asyncMonitorPresetLabel(monitor.preset))}</span>
+            <span class="category-badge">${escapeHtml(asyncMatchTypeLabel(matchType))}</span>
             <span class="source-badge ${monitor.enabled ? 'trigger' : 'loop'}">${monitor.enabled ? '启用' : '停用'}</span>
           </div>
           <h4>${escapeHtml(monitor.name ?? monitor.monitor_id ?? '未命名识别')}</h4>
@@ -123,13 +125,30 @@ function renderSharedVariablePanel() {
         const meta = item._shared ?? {};
         const status = String(meta.status ?? 'idle');
         const point = item.found ? `(${item.x ?? '--'}, ${item.y ?? '--'})` : '--';
+        const score = typeof item.score === 'number' ? item.score : 0;
+        const scorePct = Math.round(Math.min(1, Math.max(0, score)) * 100);
+        const scoreColor = item.found ? 'var(--success)' : score > 0.5 ? 'var(--warn)' : 'var(--danger)';
+        const statusIcon = item.found ? '●' : status === 'scanning' ? '◌' : '○';
+        const statusIconColor = item.found ? 'var(--success)' : status === 'scanning' ? 'var(--accent)' : 'var(--muted)';
+        const tplPath = String(item.template_path ?? '').trim();
+        const tplName = tplPath ? tplPath.split('/').pop() : '';
         return `
-          <div class="shared-var-row">
-            <strong>${escapeHtml(item.output_variable ?? item.variable_name ?? 'target')}</strong>
-            <span class="runtime-badge ${escapeHtml(asyncMonitorStatusClass(status))}">${escapeHtml(asyncMonitorStatusLabel(status))}</span>
-            <span>${escapeHtml(item.found ? '找到' : '未找到')}</span>
-            <span>坐标 ${escapeHtml(point)}</span>
-            <span class="muted-text">${escapeHtml(meta.monitor_name ?? '未绑定')}</span>
+          <div class="shared-var-row enhanced">
+            <div class="shared-var-header">
+              <span class="shared-var-status-icon" style="color:${statusIconColor}">${statusIcon}</span>
+              <strong>${escapeHtml(item.output_variable ?? item.variable_name ?? 'target')}</strong>
+              <span class="runtime-badge ${escapeHtml(asyncMonitorStatusClass(status))}">${escapeHtml(asyncMonitorStatusLabel(status))}</span>
+              <span class="muted-text">${escapeHtml(meta.monitor_name ?? '未绑定')}</span>
+            </div>
+            <div class="shared-var-details">
+              <span>${escapeHtml(item.found ? '找到' : '未找到')}</span>
+              <span>坐标 ${escapeHtml(point)}</span>
+              ${tplName ? `<span class="muted-text" title="${escapeHtml(tplPath)}">${escapeHtml(tplName)}</span>` : ''}
+            </div>
+            ${score > 0 ? `<div class="shared-var-score">
+              <div class="score-bar"><div class="score-fill" style="width:${scorePct}%;background:${scoreColor}"></div></div>
+              <span class="score-label">${(score * 100).toFixed(1)}%</span>
+            </div>` : ''}
           </div>
         `;
       }).join('')}</div>`

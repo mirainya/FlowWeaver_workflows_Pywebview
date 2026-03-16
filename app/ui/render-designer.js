@@ -312,13 +312,16 @@ function renderStepFields(step, stepPath) {
   }
 
   if (step.kind === 'detect_image') {
+    const testId = `match-test-${sanitizeDomToken(stepPath)}`;
     return [
       fieldItem(
         '模板图路径',
         `<div class="template-upload-row">
           <input class="control-input" value="${escapeHtml(step.template_path)}" placeholder="例如 assets/templates/target_demo.png" oninput="window.updateStepField('${stepPath}', 'template_path', this.value)" />
           <button class="ghost-button small-button" type="button" onclick="window.uploadTemplateForStep('${stepPath}')">上传模板</button>
-        </div>`,
+          <button class="ghost-button small-button" type="button" onclick="window.captureTemplateForStep('${stepPath}')">屏幕截取</button>
+        </div>
+        ${step.template_path ? `<div class="template-thumb-wrap" id="thumb-${sanitizeDomToken(stepPath)}"><img class="template-thumb" data-template-path="${escapeHtml(step.template_path)}" alt="模板预览" /></div>` : ''}`,
         '支持手动填写路径，或直接上传图片后自动保存到 assets/templates。',
         true,
       ),
@@ -339,6 +342,10 @@ function renderStepFields(step, stepPath) {
         '扫描间隔',
         `<input class="control-input" type="number" min="1" max="64" step="1" value="${escapeHtml(step.search_step)}" oninput="window.updateStepField('${stepPath}', 'search_step', this.value, 'int')" />`
       ),
+      `<div class="field-wide-span match-test-section">
+        <button class="ghost-button small-button" type="button" onclick="window.testTemplateMatch('${stepPath}', '${testId}')">测试匹配</button>
+        <div id="${testId}" class="match-test-result"></div>
+      </div>`,
     ].join('');
   }
 
@@ -884,6 +891,175 @@ function renderStepFields(step, stepPath) {
     ].join('');
   }
 
+  if (step.kind === 'check_pixels') {
+    const points = Array.isArray(step.points) ? step.points : [];
+    const pointRows = points.map((pt, i) => `
+      <div class="pixel-point-row" style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
+        <input class="control-input" type="number" style="width:70px" placeholder="X" value="${pt.x || 0}" oninput="window.updateStepField('${stepPath}', 'points.${i}.x', this.value, 'int')" />
+        <input class="control-input" type="number" style="width:70px" placeholder="Y" value="${pt.y || 0}" oninput="window.updateStepField('${stepPath}', 'points.${i}.y', this.value, 'int')" />
+        <input class="control-input" style="width:90px" placeholder="#RRGGBB" value="${escapeHtml(pt.expected_color || '')}" oninput="window.updateStepField('${stepPath}', 'points.${i}.expected_color', this.value)" />
+        <input class="control-input" type="number" style="width:55px" min="0" max="255" value="${pt.tolerance || 20}" oninput="window.updateStepField('${stepPath}', 'points.${i}.tolerance', this.value, 'int')" />
+        <button class="ghost-button small-button" type="button" onclick="window.removeCheckPixelPoint('${stepPath}', ${i})">删</button>
+      </div>
+    `).join('');
+    return [
+      fieldItem(
+        '检测点列表',
+        `<div class="pixel-points-container">
+          <div style="display:flex;gap:6px;margin-bottom:4px;font-size:11px;color:var(--text-muted);">
+            <span style="width:70px">X</span><span style="width:70px">Y</span><span style="width:90px">颜色</span><span style="width:55px">容差</span>
+          </div>
+          ${pointRows}
+          <button class="ghost-button small-button" type="button" onclick="window.addCheckPixelPoint('${stepPath}')">+ 添加检测点</button>
+        </div>`,
+        '每个检测点指定坐标和期望颜色，容差为 RGB 各通道允许偏差。',
+        true
+      ),
+      fieldItem(
+        '匹配逻辑',
+        `<select class="control-input" onchange="window.updateStepField('${stepPath}', 'logic', this.value)">
+          <option value="all" ${step.logic === 'all' ? 'selected' : ''}>全部匹配 (AND)</option>
+          <option value="any" ${step.logic === 'any' ? 'selected' : ''}>任一匹配 (OR)</option>
+        </select>`
+      ),
+      fieldItem(
+        '结果名称',
+        `<input class="control-input" value="${escapeHtml(step.save_as || 'pixel_result')}" placeholder="pixel_result" oninput="window.updateStepField('${stepPath}', 'save_as', this.value)" />`
+      ),
+    ].join('');
+  }
+
+  if (step.kind === 'check_region_color') {
+    return [
+      fieldItem(
+        '区域左上角 X',
+        `<input class="control-input" type="number" step="1" value="${escapeHtml(step.left)}" oninput="window.updateStepField('${stepPath}', 'left', this.value, 'int')" />`
+      ),
+      fieldItem(
+        '区域左上角 Y',
+        `<input class="control-input" type="number" step="1" value="${escapeHtml(step.top)}" oninput="window.updateStepField('${stepPath}', 'top', this.value, 'int')" />`
+      ),
+      fieldItem(
+        '宽度',
+        `<input class="control-input" type="number" min="1" step="1" value="${escapeHtml(step.width)}" oninput="window.updateStepField('${stepPath}', 'width', this.value, 'int')" />`
+      ),
+      fieldItem(
+        '高度',
+        `<input class="control-input" type="number" min="1" step="1" value="${escapeHtml(step.height)}" oninput="window.updateStepField('${stepPath}', 'height', this.value, 'int')" />`
+      ),
+      fieldItem(
+        '期望颜色',
+        `<input class="control-input" value="${escapeHtml(step.expected_color)}" placeholder="#FF0000" oninput="window.updateStepField('${stepPath}', 'expected_color', this.value)" />`
+      ),
+      fieldItem(
+        '容差',
+        `<input class="control-input" type="number" min="0" max="255" step="1" value="${escapeHtml(step.tolerance)}" oninput="window.updateStepField('${stepPath}', 'tolerance', this.value, 'int')" />`
+      ),
+      fieldItem(
+        '最低占比',
+        `<input class="control-input" type="number" min="0.01" max="1" step="0.01" value="${escapeHtml(step.min_ratio)}" oninput="window.updateStepField('${stepPath}', 'min_ratio', this.value, 'float')" />`,
+        '区域内匹配像素占比达到此值则 found=true，范围 0.01~1.0。'
+      ),
+      fieldItem(
+        '结果名称',
+        `<input class="control-input" value="${escapeHtml(step.save_as || 'region_color_result')}" placeholder="region_color_result" oninput="window.updateStepField('${stepPath}', 'save_as', this.value)" />`
+      ),
+    ].join('');
+  }
+
+  if (step.kind === 'detect_color_region') {
+    return [
+      fieldItem(
+        'H 范围',
+        `<div style="display:flex;gap:6px;align-items:center;">
+          <input class="control-input" type="number" min="0" max="179" style="width:70px" value="${escapeHtml(step.h_min)}" oninput="window.updateStepField('${stepPath}', 'h_min', this.value, 'int')" />
+          <span>~</span>
+          <input class="control-input" type="number" min="0" max="179" style="width:70px" value="${escapeHtml(step.h_max)}" oninput="window.updateStepField('${stepPath}', 'h_max', this.value, 'int')" />
+        </div>`,
+        'HSV 色相范围 0~179。'
+      ),
+      fieldItem(
+        'S 范围',
+        `<div style="display:flex;gap:6px;align-items:center;">
+          <input class="control-input" type="number" min="0" max="255" style="width:70px" value="${escapeHtml(step.s_min)}" oninput="window.updateStepField('${stepPath}', 's_min', this.value, 'int')" />
+          <span>~</span>
+          <input class="control-input" type="number" min="0" max="255" style="width:70px" value="${escapeHtml(step.s_max)}" oninput="window.updateStepField('${stepPath}', 's_max', this.value, 'int')" />
+        </div>`,
+        '饱和度范围 0~255。'
+      ),
+      fieldItem(
+        'V 范围',
+        `<div style="display:flex;gap:6px;align-items:center;">
+          <input class="control-input" type="number" min="0" max="255" style="width:70px" value="${escapeHtml(step.v_min)}" oninput="window.updateStepField('${stepPath}', 'v_min', this.value, 'int')" />
+          <span>~</span>
+          <input class="control-input" type="number" min="0" max="255" style="width:70px" value="${escapeHtml(step.v_max)}" oninput="window.updateStepField('${stepPath}', 'v_max', this.value, 'int')" />
+        </div>`,
+        '明度范围 0~255。'
+      ),
+      fieldItem(
+        '搜索区域(可选)',
+        `<div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <input class="control-input" type="number" style="width:70px" placeholder="左" value="${step.region_left || 0}" oninput="window.updateStepField('${stepPath}', 'region_left', this.value, 'int')" />
+          <input class="control-input" type="number" style="width:70px" placeholder="上" value="${step.region_top || 0}" oninput="window.updateStepField('${stepPath}', 'region_top', this.value, 'int')" />
+          <input class="control-input" type="number" style="width:70px" placeholder="宽" value="${step.region_width || 0}" oninput="window.updateStepField('${stepPath}', 'region_width', this.value, 'int')" />
+          <input class="control-input" type="number" style="width:70px" placeholder="高" value="${step.region_height || 0}" oninput="window.updateStepField('${stepPath}', 'region_height', this.value, 'int')" />
+        </div>`,
+        '宽高都为 0 时搜索全屏。'
+      ),
+      fieldItem(
+        '最小面积',
+        `<input class="control-input" type="number" min="1" step="10" value="${escapeHtml(step.min_area)}" oninput="window.updateStepField('${stepPath}', 'min_area', this.value, 'int')" />`,
+        '忽略面积小于此值的区域。'
+      ),
+      fieldItem(
+        '结果名称',
+        `<input class="control-input" value="${escapeHtml(step.save_as || 'color_region_result')}" placeholder="color_region_result" oninput="window.updateStepField('${stepPath}', 'save_as', this.value)" />`
+      ),
+    ].join('');
+  }
+
+  if (step.kind === 'match_fingerprint') {
+    const samplePoints = Array.isArray(step.sample_points) ? step.sample_points : [];
+    const spRows = samplePoints.map((sp, i) => `
+      <div class="pixel-point-row" style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
+        <input class="control-input" type="number" style="width:60px" placeholder="dx" value="${sp.dx || 0}" oninput="window.updateStepField('${stepPath}', 'sample_points.${i}.dx', this.value, 'int')" />
+        <input class="control-input" type="number" style="width:60px" placeholder="dy" value="${sp.dy || 0}" oninput="window.updateStepField('${stepPath}', 'sample_points.${i}.dy', this.value, 'int')" />
+        <input class="control-input" style="width:90px" placeholder="#RRGGBB" value="${escapeHtml(sp.expected_color || '')}" oninput="window.updateStepField('${stepPath}', 'sample_points.${i}.expected_color', this.value)" />
+        <button class="ghost-button small-button" type="button" onclick="window.removeFingerprintPoint('${stepPath}', ${i})">删</button>
+      </div>
+    `).join('');
+    return [
+      fieldItem(
+        '锚点 X',
+        `<input class="control-input" type="number" step="1" value="${escapeHtml(step.anchor_x)}" oninput="window.updateStepField('${stepPath}', 'anchor_x', this.value, 'int')" />`
+      ),
+      fieldItem(
+        '锚点 Y',
+        `<input class="control-input" type="number" step="1" value="${escapeHtml(step.anchor_y)}" oninput="window.updateStepField('${stepPath}', 'anchor_y', this.value, 'int')" />`
+      ),
+      fieldItem(
+        '采样点列表',
+        `<div class="pixel-points-container">
+          <div style="display:flex;gap:6px;margin-bottom:4px;font-size:11px;color:var(--text-muted);">
+            <span style="width:60px">dx</span><span style="width:60px">dy</span><span style="width:90px">颜色</span>
+          </div>
+          ${spRows}
+          <button class="ghost-button small-button" type="button" onclick="window.addFingerprintPoint('${stepPath}')">+ 添加采样点</button>
+        </div>`,
+        '每个采样点为相对锚点的偏移和期望颜色。',
+        true
+      ),
+      fieldItem(
+        '容差',
+        `<input class="control-input" type="number" min="0" max="255" step="1" value="${escapeHtml(step.tolerance)}" oninput="window.updateStepField('${stepPath}', 'tolerance', this.value, 'int')" />`
+      ),
+      fieldItem(
+        '结果名称',
+        `<input class="control-input" value="${escapeHtml(step.save_as || 'fingerprint_result')}" placeholder="fingerprint_result" oninput="window.updateStepField('${stepPath}', 'save_as', this.value)" />`
+      ),
+    ].join('');
+  }
+
   return [
     fieldItem(
       '按键',
@@ -921,13 +1097,22 @@ function renderDesignerIndexMap() {
   `).join('');
 }
 
+function _isStepRunning(stepIndex) {
+  const wfId = state.designer.workflow_id;
+  if (!wfId) return false;
+  const rt = state.runtime?.workflow_states?.[wfId];
+  if (!rt || !rt.active) return false;
+  return rt.current_step_index === stepIndex;
+}
+
 function renderStepCard(step, stepPath, index, nested = false) {
   const collapsed = state.collapsedSteps.has(stepPath);
   const collapseIcon = collapsed ? 'arrow-down' : 'arrow-up';
   const collapseLabel = collapsed ? '展开' : '收起';
   const cardId = nested ? '' : ` id="step-card-${stepPath.replaceAll('.', '-')}"`;
+  const isRunning = !nested && _isStepRunning(index - 1);
   return `
-    <article class="step-card ${nested ? 'nested' : ''} ${collapsed ? 'collapsed' : ''}"${cardId}>
+    <article class="step-card ${nested ? 'nested' : ''} ${collapsed ? 'collapsed' : ''} ${isRunning ? 'step-running' : ''}"${cardId}>
       <div class="step-header">
         <div class="step-header-left" onclick="window.toggleStepCollapse('${stepPath}')">
           <small class="step-index">步骤 ${index}</small>
@@ -962,4 +1147,27 @@ function renderDesignerSteps() {
     ? `<div class="step-list">${steps.map((step, index) => renderStepCard(step, `steps.${index}`, index + 1)).join('')}</div>`
     : '<div class="empty-state">当前流程还没有步骤，先添加一个节点。</div>';
   renderDesignerIndexMap();
+  loadTemplateThumbnails();
+}
+
+function loadTemplateThumbnails() {
+  const imgs = document.querySelectorAll('img.template-thumb[data-template-path]');
+  for (const img of imgs) {
+    const tplPath = img.dataset.templatePath;
+    if (!tplPath || img.src) continue;
+    const client = api();
+    if (!client?.get_template_thumbnail) continue;
+    client.get_template_thumbnail({ template_path: tplPath, max_size: 120 }).then((res) => {
+      if (res?.ok && res.data_url) {
+        img.src = res.data_url;
+        img.title = `${res.width}×${res.height}`;
+      } else {
+        const wrap = img.closest('.template-thumb-wrap');
+        if (wrap) wrap.hidden = true;
+      }
+    }).catch(() => {
+      const wrap = img.closest('.template-thumb-wrap');
+      if (wrap) wrap.hidden = true;
+    });
+  }
 }

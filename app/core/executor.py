@@ -32,6 +32,9 @@ class WorkflowExecutor:
         self._shared_variable_resolver = shared_variable_resolver
         self._shared_variable_state_setter = shared_variable_state_setter
         self._call_workflow_handler = call_workflow_handler
+        self._pixel_checker: Any = None
+        self._color_detector: Any = None
+        self._feature_matcher: Any = None
         self._loop_lock = Lock()
         self._active_workflows: dict[str, Event] = {}
         self._active_threads: dict[str, Thread] = {}
@@ -244,10 +247,23 @@ class WorkflowExecutor:
         context: dict[str, Any],
         stop_event: Event | None,
     ) -> None:
-        for action in actions:
+        for step_index, action in enumerate(actions):
             if stop_event is not None and stop_event.is_set():
                 return
-            self._execute_action(workflow_id, action, workflow_settings, context, stop_event)
+            self._emit_runtime_event(workflow_id, {
+                "type": "step_enter",
+                "step_index": step_index,
+                "step_kind": action.kind,
+                "step_title": action.title,
+            })
+            try:
+                self._execute_action(workflow_id, action, workflow_settings, context, stop_event)
+            finally:
+                self._emit_runtime_event(workflow_id, {
+                    "type": "step_exit",
+                    "step_index": step_index,
+                    "step_kind": action.kind,
+                })
 
     def _execute_action(
         self,
@@ -279,6 +295,10 @@ class WorkflowExecutor:
             "type_text": lambda params: self._handle_type_text(workflow_id, params, stop_event),
             "mouse_move": lambda params: self._handle_mouse_move(workflow_id, params, context, stop_event),
             "set_variable": lambda params: self._handle_set_variable(workflow_id, params, context),
+            "check_pixels": lambda params: self._handle_check_pixels(workflow_id, params, context, stop_event),
+            "check_region_color": lambda params: self._handle_check_region_color(workflow_id, params, context, stop_event),
+            "detect_color_region": lambda params: self._handle_detect_color_region(workflow_id, params, context, stop_event),
+            "match_fingerprint": lambda params: self._handle_match_fingerprint(workflow_id, params, context, stop_event),
         }
         handler = handlers.get(action.kind)
         if handler is None:
@@ -1085,4 +1105,135 @@ class WorkflowExecutor:
         self._emit_runtime_event(
             workflow_id,
             {"type": "set_variable", "var_name": var_name, "field": field, "value": typed_value},
+        )
+
+    def _handle_check_pixels(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None = None,
+    ) -> None:
+        if stop_event is not None and stop_event.is_set():
+            return
+        if self._pixel_checker is None:
+            raise RuntimeError("PixelChecker 未初始化")
+        points = list(params.get("points", []))
+        logic = str(params.get("logic", "all")).strip()
+        save_as = str(params.get("save_as", "pixel_result")).strip() or "pixel_result"
+        result = self._pixel_checker.check_pixels(points, logic=logic)
+        self._set_local_var(context, save_as, result)
+        self._emit_runtime_event(
+            workflow_id,
+            {
+                "type": "check_pixels",
+                "found": result["found"],
+                "match_count": result["match_count"],
+                "total": result["total"],
+                "save_as": save_as,
+            },
+        )
+
+    def _handle_check_region_color(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None = None,
+    ) -> None:
+        if stop_event is not None and stop_event.is_set():
+            return
+        if self._pixel_checker is None:
+            raise RuntimeError("PixelChecker 未初始化")
+        save_as = str(params.get("save_as", "region_color_result")).strip() or "region_color_result"
+        result = self._pixel_checker.check_region_color(
+            left=int(params.get("left", 0)),
+            top=int(params.get("top", 0)),
+            width=int(params.get("width", 100)),
+            height=int(params.get("height", 100)),
+            expected_color=str(params.get("expected_color", "")),
+            tolerance=int(params.get("tolerance", 20)),
+            min_ratio=float(params.get("min_ratio", 0.5)),
+        )
+        self._set_local_var(context, save_as, result)
+        self._emit_runtime_event(
+            workflow_id,
+            {
+                "type": "check_region_color",
+                "found": result["found"],
+                "ratio": result["ratio"],
+                "save_as": save_as,
+            },
+        )
+
+    def _handle_detect_color_region(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None = None,
+    ) -> None:
+        if stop_event is not None and stop_event.is_set():
+            return
+        if self._color_detector is None:
+            raise RuntimeError("ColorRegionDetector 未初始化")
+        save_as = str(params.get("save_as", "color_region_result")).strip() or "color_region_result"
+        region = None
+        rw, rh = int(params.get("region_width", 0)), int(params.get("region_height", 0))
+        if rw > 0 and rh > 0:
+            region = {
+                "left": int(params.get("region_left", 0)),
+                "top": int(params.get("region_top", 0)),
+                "width": rw,
+                "height": rh,
+            }
+        result = self._color_detector.detect(
+            h_min=int(params.get("h_min", 0)),
+            h_max=int(params.get("h_max", 179)),
+            s_min=int(params.get("s_min", 50)),
+            s_max=int(params.get("s_max", 255)),
+            v_min=int(params.get("v_min", 50)),
+            v_max=int(params.get("v_max", 255)),
+            region=region,
+            min_area=int(params.get("min_area", 100)),
+        )
+        self._set_local_var(context, save_as, result)
+        self._emit_runtime_event(
+            workflow_id,
+            {
+                "type": "detect_color_region",
+                "found": result["found"],
+                "count": result.get("count", 0),
+                "save_as": save_as,
+            },
+        )
+
+    def _handle_match_fingerprint(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None = None,
+    ) -> None:
+        if stop_event is not None and stop_event.is_set():
+            return
+        if self._feature_matcher is None:
+            raise RuntimeError("FeatureMatcher 未初始化")
+        save_as = str(params.get("save_as", "fingerprint_result")).strip() or "fingerprint_result"
+        result = self._feature_matcher.match(
+            anchor_x=int(params.get("anchor_x", 0)),
+            anchor_y=int(params.get("anchor_y", 0)),
+            sample_points=list(params.get("sample_points", [])),
+            tolerance=int(params.get("tolerance", 20)),
+        )
+        self._set_local_var(context, save_as, result)
+        self._emit_runtime_event(
+            workflow_id,
+            {
+                "type": "match_fingerprint",
+                "found": result["found"],
+                "match_count": result.get("match_count", 0),
+                "total": result.get("total", 0),
+                "save_as": save_as,
+            },
         )

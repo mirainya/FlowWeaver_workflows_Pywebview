@@ -84,6 +84,10 @@ def _step_title(kind: str) -> str:
         "mouse_scroll": "鼠标滚轮",
         "mouse_hold": "鼠标长按",
         "detect_color": "像素取色",
+        "check_pixels": "多点像素检测",
+        "check_region_color": "区域颜色占比",
+        "detect_color_region": "HSV颜色区域",
+        "match_fingerprint": "特征指纹匹配",
         "loop": "循环",
         "call_workflow": "调用子流程",
         "if_condition": "条件判断",
@@ -368,6 +372,78 @@ def _normalize_custom_step(raw_step: Any) -> dict[str, Any] | None:
             "var_name": str(raw_step.get("var_name", "target")).strip() or "target",
             "field": str(raw_step.get("field", "found")).strip() or "found",
             "value": str(raw_step.get("value", "")),
+        }
+
+    if kind == "check_pixels":
+        logic = str(raw_step.get("logic", "all")).strip()
+        if logic not in {"all", "any"}:
+            logic = "all"
+        raw_points = list(raw_step.get("points", []))
+        points = []
+        for pt in raw_points:
+            if not isinstance(pt, dict):
+                continue
+            points.append({
+                "x": _clamp_int(pt.get("x", 0), 0, -100000, 100000),
+                "y": _clamp_int(pt.get("y", 0), 0, -100000, 100000),
+                "expected_color": str(pt.get("expected_color", "")).strip(),
+                "tolerance": _clamp_int(pt.get("tolerance", 20), 20, 0, 255),
+            })
+        return {
+            "kind": "check_pixels",
+            "points": points,
+            "logic": logic,
+            "save_as": str(raw_step.get("save_as", "pixel_result")).strip() or "pixel_result",
+        }
+
+    if kind == "check_region_color":
+        return {
+            "kind": "check_region_color",
+            "left": _clamp_int(raw_step.get("left", 0), 0, -100000, 100000),
+            "top": _clamp_int(raw_step.get("top", 0), 0, -100000, 100000),
+            "width": _clamp_int(raw_step.get("width", 100), 100, 1, 100000),
+            "height": _clamp_int(raw_step.get("height", 100), 100, 1, 100000),
+            "expected_color": str(raw_step.get("expected_color", "")).strip(),
+            "tolerance": _clamp_int(raw_step.get("tolerance", 20), 20, 0, 255),
+            "min_ratio": _clamp_float(raw_step.get("min_ratio", 0.5), 0.5, 0.01, 1.0),
+            "save_as": str(raw_step.get("save_as", "region_color_result")).strip() or "region_color_result",
+        }
+
+    if kind == "detect_color_region":
+        return {
+            "kind": "detect_color_region",
+            "h_min": _clamp_int(raw_step.get("h_min", 0), 0, 0, 179),
+            "h_max": _clamp_int(raw_step.get("h_max", 179), 179, 0, 179),
+            "s_min": _clamp_int(raw_step.get("s_min", 50), 50, 0, 255),
+            "s_max": _clamp_int(raw_step.get("s_max", 255), 255, 0, 255),
+            "v_min": _clamp_int(raw_step.get("v_min", 50), 50, 0, 255),
+            "v_max": _clamp_int(raw_step.get("v_max", 255), 255, 0, 255),
+            "region_left": _clamp_int(raw_step.get("region_left", 0), 0, 0, 100000),
+            "region_top": _clamp_int(raw_step.get("region_top", 0), 0, 0, 100000),
+            "region_width": _clamp_int(raw_step.get("region_width", 0), 0, 0, 100000),
+            "region_height": _clamp_int(raw_step.get("region_height", 0), 0, 0, 100000),
+            "min_area": _clamp_int(raw_step.get("min_area", 100), 100, 1, 1000000),
+            "save_as": str(raw_step.get("save_as", "color_region_result")).strip() or "color_region_result",
+        }
+
+    if kind == "match_fingerprint":
+        raw_sample_points = list(raw_step.get("sample_points", []))
+        sample_points = []
+        for sp in raw_sample_points:
+            if not isinstance(sp, dict):
+                continue
+            sample_points.append({
+                "dx": _clamp_int(sp.get("dx", 0), 0, -1000, 1000),
+                "dy": _clamp_int(sp.get("dy", 0), 0, -1000, 1000),
+                "expected_color": str(sp.get("expected_color", "")).strip(),
+            })
+        return {
+            "kind": "match_fingerprint",
+            "anchor_x": _clamp_int(raw_step.get("anchor_x", 0), 0, -100000, 100000),
+            "anchor_y": _clamp_int(raw_step.get("anchor_y", 0), 0, -100000, 100000),
+            "sample_points": sample_points,
+            "tolerance": _clamp_int(raw_step.get("tolerance", 20), 20, 0, 255),
+            "save_as": str(raw_step.get("save_as", "fingerprint_result")).strip() or "fingerprint_result",
         }
 
     return None

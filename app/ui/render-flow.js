@@ -189,83 +189,193 @@ function asyncMatchModeLabel(mode) {
   })[mode] ?? '标准';
 }
 
+function asyncMatchTypeLabel(matchType) {
+  return ({
+    template: '模板匹配',
+    check_pixels: '多点像素',
+    check_region_color: '区域颜色',
+    detect_color_region: 'HSV区域',
+    match_fingerprint: '特征指纹',
+  })[matchType] ?? '模板匹配';
+}
+
+function renderAsyncMatchTypeConfig(editor, matchType) {
+  if (matchType === 'check_pixels') {
+    const points = Array.isArray(editor.pixel_points) ? editor.pixel_points : [];
+    const pointsJson = JSON.stringify(points, null, 2);
+    return `
+      <div class="field-wide-span subsection-head">
+        <div>
+          <strong>多点像素检测配置</strong>
+          <p>设置要检测的像素点坐标和期望颜色。</p>
+        </div>
+      </div>
+      ${fieldItem('判断逻辑', `<select class="control-input" onchange="window.updateAsyncMonitorField('pixel_logic', this.value)">
+        <option value="all" ${editor.pixel_logic === 'all' ? 'selected' : ''}>全部匹配</option>
+        <option value="any" ${editor.pixel_logic === 'any' ? 'selected' : ''}>任一匹配</option>
+      </select>`, '全部匹配：所有点都符合才算找到；任一匹配：有一个符合就算找到。')}
+      ${fieldItem('像素点列表 (JSON)', `<textarea class="control-input" rows="6" style="font-family:monospace;font-size:12px" oninput="window.updateAsyncMonitorJsonField('pixel_points', this.value)">${escapeHtml(pointsJson)}</textarea>`, '格式：[{"x":100,"y":200,"expected_color":"#FF0000","tolerance":20}, ...]', true)}
+      <div class="field-wide-span">
+        <button class="ghost-button small-button" type="button" onclick="window.addAsyncPixelPoint()">添加检测点</button>
+        <button class="ghost-button small-button" type="button" onclick="window.pickPixelPointForAsync()">屏幕取点</button>
+      </div>
+    `;
+  }
+  if (matchType === 'check_region_color') {
+    const cfg = editor.region_color_config || {};
+    return `
+      <div class="field-wide-span subsection-head">
+        <div>
+          <strong>区域颜色占比配置</strong>
+          <p>检测指定矩形区域内某颜色的像素占比是否达到阈值。</p>
+        </div>
+      </div>
+      ${fieldItem('区域左上 X', `<input class="control-input" type="number" min="0" step="1" value="${escapeHtml(cfg.left ?? 0)}" oninput="window.updateAsyncMonitorNestedField('region_color_config','left', this.value, 'int')" />`)}
+      ${fieldItem('区域左上 Y', `<input class="control-input" type="number" min="0" step="1" value="${escapeHtml(cfg.top ?? 0)}" oninput="window.updateAsyncMonitorNestedField('region_color_config','top', this.value, 'int')" />`)}
+      ${fieldItem('区域宽度', `<input class="control-input" type="number" min="1" step="1" value="${escapeHtml(cfg.width ?? 100)}" oninput="window.updateAsyncMonitorNestedField('region_color_config','width', this.value, 'int')" />`)}
+      ${fieldItem('区域高度', `<input class="control-input" type="number" min="1" step="1" value="${escapeHtml(cfg.height ?? 100)}" oninput="window.updateAsyncMonitorNestedField('region_color_config','height', this.value, 'int')" />`)}
+      ${fieldItem('期望颜色', `<input class="control-input" value="${escapeHtml(cfg.expected_color ?? '#FF0000')}" placeholder="#FF0000" oninput="window.updateAsyncMonitorNestedField('region_color_config','expected_color', this.value)" />`)}
+      ${fieldItem('颜色容差', `<input class="control-input" type="number" min="0" max="255" step="1" value="${escapeHtml(cfg.tolerance ?? 20)}" oninput="window.updateAsyncMonitorNestedField('region_color_config','tolerance', this.value, 'int')" />`)}
+      ${fieldItem('最低占比', `<input class="control-input" type="number" min="0.01" max="1" step="0.01" value="${escapeHtml(cfg.min_ratio ?? 0.5)}" oninput="window.updateAsyncMonitorNestedField('region_color_config','min_ratio', this.value, 'float')" />`, '颜色像素占区域总像素的比例达到此值才算找到。')}
+      <div class="field-wide-span">
+        <button class="ghost-button small-button" type="button" onclick="window.pickRegionForAsyncMonitorConfig('region_color_config')">屏幕框选区域</button>
+      </div>
+    `;
+  }
+  if (matchType === 'detect_color_region') {
+    const cfg = editor.hsv_config || {};
+    return `
+      <div class="field-wide-span subsection-head">
+        <div>
+          <strong>HSV颜色区域配置</strong>
+          <p>在屏幕截图中查找指定 HSV 范围的连通区域。</p>
+        </div>
+      </div>
+      ${fieldItem('H 最小值', `<input class="control-input" type="number" min="0" max="179" step="1" value="${escapeHtml(cfg.h_min ?? 0)}" oninput="window.updateAsyncMonitorNestedField('hsv_config','h_min', this.value, 'int')" />`)}
+      ${fieldItem('H 最大值', `<input class="control-input" type="number" min="0" max="179" step="1" value="${escapeHtml(cfg.h_max ?? 179)}" oninput="window.updateAsyncMonitorNestedField('hsv_config','h_max', this.value, 'int')" />`)}
+      ${fieldItem('S 最小值', `<input class="control-input" type="number" min="0" max="255" step="1" value="${escapeHtml(cfg.s_min ?? 50)}" oninput="window.updateAsyncMonitorNestedField('hsv_config','s_min', this.value, 'int')" />`)}
+      ${fieldItem('S 最大值', `<input class="control-input" type="number" min="0" max="255" step="1" value="${escapeHtml(cfg.s_max ?? 255)}" oninput="window.updateAsyncMonitorNestedField('hsv_config','s_max', this.value, 'int')" />`)}
+      ${fieldItem('V 最小值', `<input class="control-input" type="number" min="0" max="255" step="1" value="${escapeHtml(cfg.v_min ?? 50)}" oninput="window.updateAsyncMonitorNestedField('hsv_config','v_min', this.value, 'int')" />`)}
+      ${fieldItem('V 最大值', `<input class="control-input" type="number" min="0" max="255" step="1" value="${escapeHtml(cfg.v_max ?? 255)}" oninput="window.updateAsyncMonitorNestedField('hsv_config','v_max', this.value, 'int')" />`)}
+      ${fieldItem('最小面积', `<input class="control-input" type="number" min="1" step="10" value="${escapeHtml(cfg.min_area ?? 100)}" oninput="window.updateAsyncMonitorNestedField('hsv_config','min_area', this.value, 'int')" />`, '面积小于此值的区域会被忽略。')}
+    `;
+  }
+  if (matchType === 'match_fingerprint') {
+    const cfg = editor.fingerprint_config || {};
+    const samplePoints = Array.isArray(cfg.sample_points) ? cfg.sample_points : [];
+    const pointsJson = JSON.stringify(samplePoints, null, 2);
+    return `
+      <div class="field-wide-span subsection-head">
+        <div>
+          <strong>特征指纹配置</strong>
+          <p>以锚点为中心，检查周围采样点的颜色是否匹配。</p>
+        </div>
+      </div>
+      ${fieldItem('锚点 X', `<input class="control-input" type="number" min="0" step="1" value="${escapeHtml(cfg.anchor_x ?? 0)}" oninput="window.updateAsyncMonitorNestedField('fingerprint_config','anchor_x', this.value, 'int')" />`)}
+      ${fieldItem('锚点 Y', `<input class="control-input" type="number" min="0" step="1" value="${escapeHtml(cfg.anchor_y ?? 0)}" oninput="window.updateAsyncMonitorNestedField('fingerprint_config','anchor_y', this.value, 'int')" />`)}
+      ${fieldItem('颜色容差', `<input class="control-input" type="number" min="0" max="255" step="1" value="${escapeHtml(cfg.tolerance ?? 20)}" oninput="window.updateAsyncMonitorNestedField('fingerprint_config','tolerance', this.value, 'int')" />`)}
+      ${fieldItem('采样点列表 (JSON)', `<textarea class="control-input" rows="6" style="font-family:monospace;font-size:12px" oninput="window.updateAsyncMonitorNestedJsonField('fingerprint_config','sample_points', this.value)">${escapeHtml(pointsJson)}</textarea>`, '格式：[{"dx":10,"dy":-5,"expected_color":"#FF0000"}, ...]', true)}
+      <div class="field-wide-span">
+        <button class="ghost-button small-button" type="button" onclick="window.captureFingerprint()">屏幕采集指纹</button>
+      </div>
+    `;
+  }
+  return '';
+}
+
 function renderAsyncMonitorEditorCard() {
   const editor = normalizeAsyncMonitor(state.asyncVision.editor);
   const showFixedRegion = editor.search_scope === 'fixed_region';
   const showFollowConfig = editor.search_scope === 'follow_last';
   const showCustomConfidence = editor.match_mode === 'custom';
+  const matchType = editor.match_type || 'template';
+  const isTemplate = matchType === 'template';
+  const showTemplateFields = isTemplate;
+  const showTemplateMatchFields = isTemplate;
   const saveLabel = editor.monitor_id ? '更新识别' : '保存识别';
   return `
-    <article class="workflow-card">
-      <div class="workflow-top">
+    <article class=”workflow-card”>
+      <div class=”workflow-top”>
         <div>
-          <div class="badge-row">
-            <span class="source-badge custom">后台识图</span>
-            <span class="category-badge">${escapeHtml(asyncMonitorPresetLabel(editor.preset))}</span>
+          <div class=”badge-row”>
+            <span class=”source-badge custom”>后台识图</span>
+            <span class=”category-badge”>${escapeHtml(asyncMonitorPresetLabel(editor.preset))}</span>
+            <span class=”category-badge”>${escapeHtml(asyncMatchTypeLabel(matchType))}</span>
           </div>
           <h4>${escapeHtml(editor.monitor_id ? `编辑识别：${editor.name || editor.monitor_id}` : '新建后台识图')}</h4>
           <p>在流程外后台持续找图，并把结果存起来，供流程步骤直接读取。</p>
         </div>
-        <div class="card-actions">
+        <div class=”card-actions”>
           ${renderIconButton({ icon: 'plus', label: '新建识别', onClick: 'window.resetAsyncMonitorEditor()' })}
           ${renderIconButton({ icon: 'success', label: saveLabel, variant: 'primary', onClick: 'window.saveAsyncMonitor()' })}
         </div>
       </div>
-      <div class="action-group">
-        <span class="action-chip">${escapeHtml(asyncSearchScopeLabel(editor.search_scope))}</span>
-        <span class="action-chip">${escapeHtml(asyncScanRateLabel(editor.scan_rate))}</span>
-        <span class="action-chip">${escapeHtml(asyncNotFoundActionLabel(editor.not_found_action))}</span>
+      <div class=”action-group”>
+        <span class=”action-chip”>${escapeHtml(asyncMatchTypeLabel(matchType))}</span>
+        <span class=”action-chip”>${escapeHtml(asyncSearchScopeLabel(editor.search_scope))}</span>
+        <span class=”action-chip”>${escapeHtml(asyncScanRateLabel(editor.scan_rate))}</span>
+        <span class=”action-chip”>${escapeHtml(asyncNotFoundActionLabel(editor.not_found_action))}</span>
       </div>
-      <div class="setting-grid">
-        <div class="field-wide-span subsection-head">
+      <div class=”setting-grid”>
+        <div class=”field-wide-span subsection-head”>
           <div>
             <strong>基础设置</strong>
-            <p>先选使用场景，再填写模板图和结果名称。</p>
+            <p>先选使用场景和匹配类型，再填写结果名称。</p>
           </div>
         </div>
-        ${fieldItem('使用场景', `<select class="control-input" onchange="window.updateAsyncMonitorField('preset', this.value)">
-          ${Object.entries(ASYNC_MONITOR_PRESETS).map(([key, item]) => `<option value="${key}" ${key === editor.preset ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}
+        ${fieldItem('使用场景', `<select class=”control-input” onchange=”window.updateAsyncMonitorField('preset', this.value)”>
+          ${Object.entries(ASYNC_MONITOR_PRESETS).map(([key, item]) => `<option value=”${key}” ${key === editor.preset ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}
         </select>`, '系统会按场景带出推荐设置。')}
-        ${fieldItem('识别名称', `<input class="control-input" id="async-monitor-name" value="${escapeHtml(editor.name)}" placeholder="例如 开始按钮 / 对话框确认 / Boss图标" oninput="window.updateAsyncMonitorField('name', this.value)" />`)}
-        ${fieldItem('结果名称', `<input class="control-input" id="async-monitor-output-variable" value="${escapeHtml(editor.output_variable)}" placeholder="target" oninput="window.updateAsyncMonitorField('output_variable', this.value)" />`, '流程中的点击和分支步骤可以直接读取这个结果。')}
-        ${fieldItem('模板图片', `<div class="template-upload-row">
-          <input class="control-input" id="async-monitor-template-path" value="${escapeHtml(editor.template_path)}" placeholder="assets/templates/target_demo.png" oninput="window.updateAsyncMonitorField('template_path', this.value)" />
-          <button class="ghost-button small-button" type="button" onclick="window.uploadTemplateForAsyncMonitor()">上传模板</button>
-        </div>`, '支持直接填写路径，或上传图片保存到 assets/templates。', true)}
-        <div class="field-wide-span subsection-head">
+        ${fieldItem('匹配类型', `<select class=”control-input” onchange=”window.updateAsyncMonitorField('match_type', this.value)”>
+          <option value=”template” ${matchType === 'template' ? 'selected' : ''}>模板匹配（找图）</option>
+          <option value=”check_pixels” ${matchType === 'check_pixels' ? 'selected' : ''}>多点像素检测</option>
+          <option value=”check_region_color” ${matchType === 'check_region_color' ? 'selected' : ''}>区域颜色占比</option>
+          <option value=”detect_color_region” ${matchType === 'detect_color_region' ? 'selected' : ''}>HSV颜色区域</option>
+          <option value=”match_fingerprint” ${matchType === 'match_fingerprint' ? 'selected' : ''}>特征指纹匹配</option>
+        </select>`, '选择后台监控使用的匹配方式。')}
+        ${fieldItem('识别名称', `<input class=”control-input” id=”async-monitor-name” value=”${escapeHtml(editor.name)}” placeholder=”例如 开始按钮 / 对话框确认 / Boss图标” oninput=”window.updateAsyncMonitorField('name', this.value)” />`)}
+        ${fieldItem('结果名称', `<input class=”control-input” id=”async-monitor-output-variable” value=”${escapeHtml(editor.output_variable)}” placeholder=”target” oninput=”window.updateAsyncMonitorField('output_variable', this.value)” />`, '流程中的点击和分支步骤可以直接读取这个结果。')}
+        ${showTemplateFields ? fieldItem('模板图片', `<div class=”template-upload-row”>
+          <input class=”control-input” id=”async-monitor-template-path” value=”${escapeHtml(editor.template_path)}” placeholder=”assets/templates/target_demo.png” oninput=”window.updateAsyncMonitorField('template_path', this.value)” />
+          <button class=”ghost-button small-button” type=”button” onclick=”window.uploadTemplateForAsyncMonitor()”>上传模板</button>
+          <button class=”ghost-button small-button” type=”button” onclick=”window.captureTemplateForAsyncMonitor()”>屏幕截取</button>
+        </div>`, '支持直接填写路径，或上传图片保存到 assets/templates。', true) : ''}
+        ${renderAsyncMatchTypeConfig(editor, matchType)}
+        <div class=”field-wide-span subsection-head”>
           <div>
             <strong>查找方式</strong>
-            <p>尽量用“固定区域”或“附近查找”，会比全屏更省资源。</p>
+            <p>尽量用”固定区域”或”附近查找”，会比全屏更省资源。</p>
           </div>
         </div>
-        ${fieldItem('在哪里找', `<select class="control-input" onchange="window.updateAsyncMonitorField('search_scope', this.value)">
-          <option value="full_screen" ${editor.search_scope === 'full_screen' ? 'selected' : ''}>全屏查找</option>
-          <option value="fixed_region" ${editor.search_scope === 'fixed_region' ? 'selected' : ''}>固定区域查找</option>
-          <option value="follow_last" ${editor.search_scope === 'follow_last' ? 'selected' : ''}>先全屏找到，之后优先在附近找</option>
+        ${fieldItem('在哪里找', `<select class=”control-input” onchange=”window.updateAsyncMonitorField('search_scope', this.value)”>
+          <option value=”full_screen” ${editor.search_scope === 'full_screen' ? 'selected' : ''}>全屏查找</option>
+          <option value=”fixed_region” ${editor.search_scope === 'fixed_region' ? 'selected' : ''}>固定区域查找</option>
+          <option value=”follow_last” ${editor.search_scope === 'follow_last' ? 'selected' : ''}>先全屏找到，之后优先在附近找</option>
         </select>`)}
-        ${fieldItem('识别速度', `<select class="control-input" onchange="window.updateAsyncMonitorField('scan_rate', this.value)">
-          <option value="low" ${editor.scan_rate === 'low' ? 'selected' : ''}>省资源</option>
-          <option value="normal" ${editor.scan_rate === 'normal' ? 'selected' : ''}>均衡</option>
-          <option value="high" ${editor.scan_rate === 'high' ? 'selected' : ''}>高速</option>
-          <option value="ultra" ${editor.scan_rate === 'ultra' ? 'selected' : ''}>超快（30ms/次）</option>
+        ${fieldItem('识别速度', `<select class=”control-input” onchange=”window.updateAsyncMonitorField('scan_rate', this.value)”>
+          <option value=”low” ${editor.scan_rate === 'low' ? 'selected' : ''}>省资源</option>
+          <option value=”normal” ${editor.scan_rate === 'normal' ? 'selected' : ''}>均衡</option>
+          <option value=”high” ${editor.scan_rate === 'high' ? 'selected' : ''}>高速</option>
+          <option value=”ultra” ${editor.scan_rate === 'ultra' ? 'selected' : ''}>超快（30ms/次）</option>
         </select>`, '越快越及时，但会更占用资源。')}
-        ${fieldItem('没找到时怎么办', `<select class="control-input" onchange="window.updateAsyncMonitorField('not_found_action', this.value)">
-          <option value="keep_last" ${editor.not_found_action === 'keep_last' ? 'selected' : ''}>保留上一次结果</option>
-          <option value="mark_missing" ${editor.not_found_action === 'mark_missing' ? 'selected' : ''}>立即标记为未找到</option>
+        ${fieldItem('没找到时怎么办', `<select class=”control-input” onchange=”window.updateAsyncMonitorField('not_found_action', this.value)”>
+          <option value=”keep_last” ${editor.not_found_action === 'keep_last' ? 'selected' : ''}>保留上一次结果</option>
+          <option value=”mark_missing” ${editor.not_found_action === 'mark_missing' ? 'selected' : ''}>立即标记为未找到</option>
         </select>`)}
-        ${fieldItem('匹配要求', `<select class="control-input" onchange="window.updateAsyncMonitorField('match_mode', this.value)">
-          <option value="loose" ${editor.match_mode === 'loose' ? 'selected' : ''}>宽松</option>
-          <option value="normal" ${editor.match_mode === 'normal' ? 'selected' : ''}>标准</option>
-          <option value="strict" ${editor.match_mode === 'strict' ? 'selected' : ''}>严格</option>
-          <option value="custom" ${editor.match_mode === 'custom' ? 'selected' : ''}>自定义</option>
-        </select>`)}
-        ${showCustomConfidence ? fieldItem('自定义匹配分数', `<input class="control-input" type="number" min="0.55" max="0.99" step="0.01" value="${escapeHtml(editor.custom_confidence)}" oninput="window.updateAsyncMonitorField('custom_confidence', this.value, 'float')" />`, '分数越高越严格。') : ''}
-        ${showFixedRegion ? fieldItem('区域左上 X', `<input class="control-input" type="number" min="0" step="1" value="${escapeHtml(editor.fixed_region.left)}" oninput="window.updateAsyncMonitorRegionField('left', this.value)" />`) : ''}
-        ${showFixedRegion ? fieldItem('区域左上 Y', `<input class="control-input" type="number" min="0" step="1" value="${escapeHtml(editor.fixed_region.top)}" oninput="window.updateAsyncMonitorRegionField('top', this.value)" />`) : ''}
-        ${showFixedRegion ? fieldItem('区域宽度', `<input class="control-input" type="number" min="0" step="1" value="${escapeHtml(editor.fixed_region.width)}" oninput="window.updateAsyncMonitorRegionField('width', this.value)" />`) : ''}
-        ${showFixedRegion ? fieldItem('区域高度', `<input class="control-input" type="number" min="0" step="1" value="${escapeHtml(editor.fixed_region.height)}" oninput="window.updateAsyncMonitorRegionField('height', this.value)" />`, '先填一个大概区域，后续可再细调。') : ''}
-        ${showFollowConfig ? fieldItem('附近查找范围', `<input class="control-input" type="number" min="60" max="4000" step="10" value="${escapeHtml(editor.follow_radius)}" oninput="window.updateAsyncMonitorField('follow_radius', this.value, 'int')" />`, '以上次找到的位置为中心，按这个范围继续找。') : ''}
-        ${showFollowConfig ? fieldItem('连续几次没找到后，扩大查找范围', `<input class="control-input" type="number" min="1" max="30" step="1" value="${escapeHtml(editor.recover_after_misses)}" oninput="window.updateAsyncMonitorField('recover_after_misses', this.value, 'int')" />`) : ''}
+        ${showTemplateMatchFields ? fieldItem('匹配要求', `<select class=”control-input” onchange=”window.updateAsyncMonitorField('match_mode', this.value)”>
+          <option value=”loose” ${editor.match_mode === 'loose' ? 'selected' : ''}>宽松</option>
+          <option value=”normal” ${editor.match_mode === 'normal' ? 'selected' : ''}>标准</option>
+          <option value=”strict” ${editor.match_mode === 'strict' ? 'selected' : ''}>严格</option>
+          <option value=”custom” ${editor.match_mode === 'custom' ? 'selected' : ''}>自定义</option>
+        </select>`) : ''}
+        ${showTemplateMatchFields && showCustomConfidence ? fieldItem('自定义匹配分数', `<input class=”control-input” type=”number” min=”0.55” max=”0.99” step=”0.01” value=”${escapeHtml(editor.custom_confidence)}” oninput=”window.updateAsyncMonitorField('custom_confidence', this.value, 'float')” />`, '分数越高越严格。') : ''}
+        ${showFixedRegion ? fieldItem('区域左上 X', `<input class=”control-input” type=”number” min=”0” step=”1” value=”${escapeHtml(editor.fixed_region.left)}” oninput=”window.updateAsyncMonitorRegionField('left', this.value)” />`) : ''}
+        ${showFixedRegion ? fieldItem('区域左上 Y', `<input class=”control-input” type=”number” min=”0” step=”1” value=”${escapeHtml(editor.fixed_region.top)}” oninput=”window.updateAsyncMonitorRegionField('top', this.value)” />`) : ''}
+        ${showFixedRegion ? fieldItem('区域宽度', `<input class=”control-input” type=”number” min=”0” step=”1” value=”${escapeHtml(editor.fixed_region.width)}” oninput=”window.updateAsyncMonitorRegionField('width', this.value)” />`) : ''}
+        ${showFixedRegion ? fieldItem('区域高度', `<input class=”control-input” type=”number” min=”0” step=”1” value=”${escapeHtml(editor.fixed_region.height)}” oninput=”window.updateAsyncMonitorRegionField('height', this.value)” />`, '先填一个大概区域，后续可再细调。') : ''}
+        ${showFixedRegion ? `<div class=”field-wide-span”><button class=”ghost-button small-button” type=”button” onclick=”window.pickRegionForAsyncMonitor()”>屏幕框选区域</button></div>` : ''}
+        ${showFollowConfig ? fieldItem('附近查找范围', `<input class=”control-input” type=”number” min=”60” max=”4000” step=”10” value=”${escapeHtml(editor.follow_radius)}” oninput=”window.updateAsyncMonitorField('follow_radius', this.value, 'int')” />`, '以上次找到的位置为中心，按这个范围继续找。') : ''}
+        ${showFollowConfig ? fieldItem('连续几次没找到后，扩大查找范围', `<input class=”control-input” type=”number” min=”1” max=”30” step=”1” value=”${escapeHtml(editor.recover_after_misses)}” oninput=”window.updateAsyncMonitorField('recover_after_misses', this.value, 'int')” />`) : ''}
         <div class="field-wide-span subsection-head">
           <div>
             <strong>高级设置</strong>

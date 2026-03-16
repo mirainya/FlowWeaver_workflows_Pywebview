@@ -123,21 +123,41 @@ function renderRuntimeOverview() {
     return;
   }
 
-  container.innerHTML = items.map(({ workflow, runtime }) => `
-    <article class="runtime-item">
-      <header>
-        <strong>${escapeHtml(workflow.name)}</strong>
-        <span class="runtime-badge ${escapeHtml(runtime.status ?? 'idle')}">${escapeHtml(runtime.status_label ?? '待机')}</span>
-      </header>
-      <div class="runtime-item-meta">
-        <span>模式：${escapeHtml(runModeLabel(workflow.run_mode))}</span>
-        <span>轮次：${escapeHtml(runtime.iteration_count ?? 0)}</span>
-        <span>按键：${escapeHtml(runtime.key_event_count ?? 0)}</span>
-        <span>最后按键：${escapeHtml(runtime.last_key ?? '--')}</span>
-      </div>
-      <p>${escapeHtml(runtime.last_message ?? '尚未触发')}</p>
-    </article>
-  `).join('');
+  for (const { workflow, runtime } of items) {
+    const wid = workflow.workflow_id;
+    let el = document.getElementById(`rt-item-${wid}`);
+    if (!el) {
+      container.innerHTML = items.map(({ workflow: w, runtime: r }) => `
+        <article class="runtime-item" id="rt-item-${escapeHtml(w.workflow_id)}">
+          <header>
+            <strong class="rt-name">${escapeHtml(w.name)}</strong>
+            <span class="runtime-badge rt-badge ${escapeHtml(r.status ?? 'idle')}">${escapeHtml(r.status_label ?? '待机')}</span>
+          </header>
+          <div class="runtime-item-meta">
+            <span class="rt-mode">模式：${escapeHtml(runModeLabel(w.run_mode))}</span>
+            <span class="rt-iter">轮次：${escapeHtml(r.iteration_count ?? 0)}</span>
+            <span class="rt-keys">按键：${escapeHtml(r.key_event_count ?? 0)}</span>
+            <span class="rt-lastkey">最后按键：${escapeHtml(r.last_key ?? '--')}</span>
+          </div>
+          <p class="rt-msg">${escapeHtml(r.last_message ?? '尚未触发')}</p>
+        </article>
+      `).join('');
+      return;
+    }
+    const badge = el.querySelector('.rt-badge');
+    if (badge) {
+      badge.className = `runtime-badge rt-badge ${escapeHtml(runtime.status ?? 'idle')}`;
+      badge.textContent = runtime.status_label ?? '待机';
+    }
+    const iter = el.querySelector('.rt-iter');
+    if (iter) iter.textContent = `轮次：${runtime.iteration_count ?? 0}`;
+    const keys = el.querySelector('.rt-keys');
+    if (keys) keys.textContent = `按键：${runtime.key_event_count ?? 0}`;
+    const lastkey = el.querySelector('.rt-lastkey');
+    if (lastkey) lastkey.textContent = `最后按键：${runtime.last_key ?? '--'}`;
+    const msg = el.querySelector('.rt-msg');
+    if (msg) msg.textContent = runtime.last_message ?? '尚未触发';
+  }
 }
 
 function renderKeyEvents() {
@@ -151,6 +171,9 @@ function renderKeyEvents() {
     container.innerHTML = '<div class="empty-state">还没有按键记录。按下热键或让宏输出按键后会显示在这里。</div>';
     return;
   }
+
+  const currentCount = container.querySelectorAll('.activity-item').length;
+  if (currentCount === events.length) return;
 
   container.innerHTML = events.map((event) => `
     <article class="activity-item">
@@ -175,6 +198,9 @@ function renderLogs() {
     return;
   }
 
+  const currentCount = container.querySelectorAll('.log-item').length;
+  if (currentCount === state.logs.length) return;
+
   container.innerHTML = state.logs.map((log) => `
     <article class="log-item">
       <header>
@@ -190,6 +216,18 @@ function renderRuntime() {
   renderSummary();
   renderRuntimeOverview();
   renderKeyEvents();
+}
+
+function updateStepRunningHighlight() {
+  const wfId = state.designer.workflow_id;
+  const rt = wfId ? state.runtime?.workflow_states?.[wfId] : null;
+  const activeIndex = (rt && rt.active) ? (rt.current_step_index ?? -1) : -1;
+  const steps = Array.isArray(state.designer.steps) ? state.designer.steps : [];
+  for (let i = 0; i < steps.length; i++) {
+    const el = document.getElementById(`step-card-steps-${i}`);
+    if (!el) continue;
+    el.classList.toggle('step-running', i === activeIndex);
+  }
 }
 
 function renderAll() {
@@ -322,6 +360,7 @@ async function refreshRuntime() {
     }
   }
   renderRuntime();
+  updateStepRunningHighlight();
 }
 
 async function saveWorkflow(workflowId) {
@@ -487,17 +526,169 @@ window.addSequenceItem = addSequenceItem;
 window.removeSequenceItem = removeSequenceItem;
 window.moveSequenceItem = moveSequenceItem;
 window.updateSequenceItem = updateSequenceItem;
+window.addCheckPixelPoint = addCheckPixelPoint;
+window.removeCheckPixelPoint = removeCheckPixelPoint;
+window.addFingerprintPoint = addFingerprintPoint;
+window.removeFingerprintPoint = removeFingerprintPoint;
 window.loadAsyncMonitorIntoEditor = loadAsyncMonitorIntoEditor;
 window.resetAsyncMonitorEditor = resetAsyncMonitorEditor;
 window.updateAsyncMonitorField = updateAsyncMonitorField;
 window.updateAsyncMonitorRegionField = updateAsyncMonitorRegionField;
 window.updateAsyncMonitorCheckbox = updateAsyncMonitorCheckbox;
+window.updateAsyncMonitorNestedField = updateAsyncMonitorNestedField;
+window.updateAsyncMonitorJsonField = updateAsyncMonitorJsonField;
+window.addAsyncPixelPoint = addAsyncPixelPoint;
+window.addAsyncFingerprintSamplePoint = addAsyncFingerprintSamplePoint;
+window.updateAsyncMonitorNestedJsonField = updateAsyncMonitorNestedJsonField;
 window.saveAsyncMonitor = saveAsyncMonitor;
 window.uploadTemplateForAsyncMonitor = uploadTemplateForAsyncMonitor;
+
+async function pickRegionForAsyncMonitor() {
+  try {
+    const region = await openRegionSelectOverlay();
+    if (!region) return;
+    window.updateAsyncMonitorRegionField('left', String(region.left));
+    window.updateAsyncMonitorRegionField('top', String(region.top));
+    window.updateAsyncMonitorRegionField('width', String(region.width));
+    window.updateAsyncMonitorRegionField('height', String(region.height));
+    renderWorkflows();
+    showToast('已从屏幕框选设置区域。', 'success');
+  } catch (err) {
+    window.alert(`区域框选失败：${err}`);
+  }
+}
+window.pickRegionForAsyncMonitor = pickRegionForAsyncMonitor;
+
+async function pickRegionForAsyncMonitorConfig(configField) {
+  try {
+    const region = await openRegionSelectOverlay();
+    if (!region) return;
+    window.updateAsyncMonitorNestedField(configField, 'left', String(region.left), 'int');
+    window.updateAsyncMonitorNestedField(configField, 'top', String(region.top), 'int');
+    window.updateAsyncMonitorNestedField(configField, 'width', String(region.width), 'int');
+    window.updateAsyncMonitorNestedField(configField, 'height', String(region.height), 'int');
+    renderWorkflows();
+    showToast('已从屏幕框选设置区域。', 'success');
+  } catch (err) {
+    window.alert(`区域框选失败：${err}`);
+  }
+}
+window.pickRegionForAsyncMonitorConfig = pickRegionForAsyncMonitorConfig;
+
+async function pickPixelPointForAsync() {
+  try {
+    const resp = await fetch('/api/pick_color', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      window.alert(`取色失败：${data.error ?? '未知错误'}`);
+      return;
+    }
+    syncAsyncMonitorEditorFromDom();
+    if (!Array.isArray(state.asyncVision.editor.pixel_points)) {
+      state.asyncVision.editor.pixel_points = [];
+    }
+    state.asyncVision.editor.pixel_points.push({
+      x: data.x ?? 0,
+      y: data.y ?? 0,
+      expected_color: data.hex ?? '#000000',
+      tolerance: 20,
+    });
+    renderWorkflows();
+    showToast(`已添加检测点 (${data.x}, ${data.y}) ${data.hex}`, 'success');
+  } catch (err) {
+    window.alert(`取色失败：${err}`);
+  }
+}
+window.pickPixelPointForAsync = pickPixelPointForAsync;
+
+async function captureFingerprint() {
+  try {
+    syncAsyncMonitorEditorFromDom();
+    const cfg = state.asyncVision.editor.fingerprint_config || {};
+    const anchorX = cfg.anchor_x ?? 0;
+    const anchorY = cfg.anchor_y ?? 0;
+    if (!anchorX && !anchorY) {
+      window.alert('请先设置锚点坐标（anchor_x, anchor_y）。');
+      return;
+    }
+    const offsets = [];
+    for (let dx = -20; dx <= 20; dx += 10) {
+      for (let dy = -20; dy <= 20; dy += 10) {
+        if (dx === 0 && dy === 0) continue;
+        offsets.push([dx, dy]);
+      }
+    }
+    const resp = await fetch('/api/capture_fingerprint', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ anchor_x: anchorX, anchor_y: anchorY, offsets }),
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      window.alert(`采集指纹失败：${data.error ?? '未知错误'}`);
+      return;
+    }
+    if (!state.asyncVision.editor.fingerprint_config || typeof state.asyncVision.editor.fingerprint_config !== 'object') {
+      state.asyncVision.editor.fingerprint_config = { anchor_x: anchorX, anchor_y: anchorY, tolerance: 20, sample_points: [] };
+    }
+    state.asyncVision.editor.fingerprint_config.sample_points = data.sample_points ?? [];
+    renderWorkflows();
+    showToast(`已采集 ${(data.sample_points ?? []).length} 个指纹采样点。`, 'success');
+  } catch (err) {
+    window.alert(`采集指纹失败：${err}`);
+  }
+}
+window.captureFingerprint = captureFingerprint;
 window.saveWorkflow = saveWorkflow;
 window.updateWorkflowEnabled = updateWorkflowEnabled;
 window.uploadTemplateForStep = uploadTemplateForStep;
 window.runWorkflow = runWorkflow;
+
+async function testTemplateMatch(stepPath, resultId) {
+  const step = readPath(state.designer, stepPath);
+  if (!step || !step.template_path) {
+    window.alert('请先填写模板图路径。');
+    return;
+  }
+  const resultEl = document.getElementById(resultId);
+  if (resultEl) {
+    resultEl.innerHTML = '<span class="capture-hint">匹配中…</span>';
+  }
+  try {
+    const client = api();
+    if (!client?.test_template_match) {
+      throw new Error('当前版本不支持匹配测试。');
+    }
+    const res = await client.test_template_match({
+      template_path: step.template_path,
+      confidence: step.confidence ?? 0.88,
+    });
+    if (!res?.ok) {
+      throw new Error(res?.error || '匹配测试失败。');
+    }
+    if (resultEl) {
+      const statusClass = res.found ? 'match-found' : 'match-miss';
+      const previewHtml = res.preview_url
+        ? `<img class="match-preview-img" src="${res.preview_url}" alt="匹配预览" />`
+        : '';
+      resultEl.innerHTML = `
+        <div class="match-test-info ${statusClass}">
+          <span>${escapeHtml(res.message || '')}</span>
+          ${res.found ? `<span class="match-coords">(${res.x}, ${res.y})</span>` : ''}
+        </div>
+        ${previewHtml}
+      `;
+    }
+  } catch (err) {
+    if (resultEl) {
+      resultEl.innerHTML = `<span class="match-test-info match-miss">${escapeHtml(String(err))}</span>`;
+    }
+  }
+}
+window.testTemplateMatch = testTemplateMatch;
 window.deleteAsyncMonitor = deleteAsyncMonitor;
 window.deleteCustomWorkflow = deleteCustomWorkflow;
 window.updateFlowSearch = updateFlowSearch;
@@ -552,6 +743,20 @@ window.addEventListener('beforeunload', () => callCaptureApi('end_key_capture'))
 window.addEventListener('DOMContentLoaded', () => {
   decorateStaticButtons();
   document.addEventListener('keydown', handleCapturedKeyInput, true);
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+      if (state.activeTab === 'designer' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        undoDesigner();
+      }
+    }
+    if ((e.ctrlKey || e.metaKey) && ((e.key === 'z' && e.shiftKey) || e.key === 'y')) {
+      if (state.activeTab === 'designer' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        redoDesigner();
+      }
+    }
+  });
   document.addEventListener('focusin', (event) => {
     const target = event.target;
     if (target instanceof HTMLInputElement && target.matches('input[data-key-capture]')) {
@@ -569,6 +774,26 @@ window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('designer-reset').addEventListener('click', () => resetDesigner(true));
   document.getElementById('designer-save').addEventListener('click', saveCustomFlow);
   document.getElementById('designer-step-add').addEventListener('click', () => addDesignerStep('steps'));
+
+  const tplBtn = document.getElementById('designer-template-insert');
+  const tplMenu = document.getElementById('designer-template-menu');
+  if (tplBtn && tplMenu) {
+    tplMenu.innerHTML = Object.entries(STEP_TEMPLATES).map(([key, tpl]) =>
+      `<button class="dropdown-item" type="button" data-tpl="${key}"><strong>${escapeHtml(tpl.label)}</strong><small>${escapeHtml(tpl.description)}</small></button>`
+    ).join('');
+    tplBtn.addEventListener('click', () => { tplMenu.hidden = !tplMenu.hidden; });
+    tplMenu.addEventListener('click', (e) => {
+      const item = e.target.closest('[data-tpl]');
+      if (!item) return;
+      insertStepTemplate('steps', item.dataset.tpl);
+      tplMenu.hidden = true;
+    });
+    document.addEventListener('click', (e) => {
+      if (!tplBtn.contains(e.target) && !tplMenu.contains(e.target)) {
+        tplMenu.hidden = true;
+      }
+    });
+  }
 
   document.getElementById('designer-name').addEventListener('input', (event) => updateDesignerField('name', event.target.value));
   document.getElementById('designer-hotkey').addEventListener('input', (event) => updateDesignerField('hotkey', event.target.value));

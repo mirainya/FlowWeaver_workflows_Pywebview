@@ -42,8 +42,61 @@ function markDesignerDirty() {
   if (state.designerSave.status === 'saving') {
     return;
   }
+  pushDesignerUndoSnapshot();
   setDesignerSaveStatus('dirty', '流程有未保存修改');
 }
+
+/* ── 撤销/重做 ── */
+const _UNDO_MAX = 50;
+const _undoStack = [];
+let _redoStack = [];
+let _lastSnapshotJson = '';
+
+function _designerSnapshot() {
+  return JSON.stringify(state.designer.steps);
+}
+
+function pushDesignerUndoSnapshot() {
+  const snap = _designerSnapshot();
+  if (snap === _lastSnapshotJson) return;
+  _undoStack.push(_lastSnapshotJson);
+  if (_undoStack.length > _UNDO_MAX) _undoStack.shift();
+  _redoStack = [];
+  _lastSnapshotJson = snap;
+}
+
+function resetDesignerUndoHistory() {
+  _undoStack.length = 0;
+  _redoStack = [];
+  _lastSnapshotJson = _designerSnapshot();
+}
+
+function undoDesigner() {
+  if (!_undoStack.length) return;
+  _redoStack.push(_designerSnapshot());
+  const prev = _undoStack.pop();
+  _lastSnapshotJson = prev;
+  try {
+    state.designer.steps = JSON.parse(prev);
+  } catch { return; }
+  renderDesignerSteps();
+  setDesignerSaveStatus('dirty', '已撤销');
+}
+
+function redoDesigner() {
+  if (!_redoStack.length) return;
+  _undoStack.push(_designerSnapshot());
+  const next = _redoStack.pop();
+  _lastSnapshotJson = next;
+  try {
+    state.designer.steps = JSON.parse(next);
+  } catch { return; }
+  renderDesignerSteps();
+  setDesignerSaveStatus('dirty', '已重做');
+}
+
+function canUndo() { return _undoStack.length > 0; }
+function canRedo() { return _redoStack.length > 0; }
 
 function renderDesignerSaveStatus() {
   const badge = document.getElementById('designer-save-badge');

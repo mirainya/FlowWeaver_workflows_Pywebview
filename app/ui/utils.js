@@ -14,6 +14,10 @@
   { group: '找图找色', items: [
     { key: 'detect_image', label: '截图找图' },
     { key: 'detect_color', label: '取像素颜色' },
+    { key: 'check_pixels', label: '多点像素检测' },
+    { key: 'check_region_color', label: '区域颜色占比' },
+    { key: 'detect_color_region', label: 'HSV颜色区域' },
+    { key: 'match_fingerprint', label: '特征指纹匹配' },
   ]},
   { group: '判断与循环', items: [
     { key: 'if_var_found', label: '找图结果判断' },

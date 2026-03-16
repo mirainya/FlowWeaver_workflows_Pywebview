@@ -163,3 +163,67 @@ class DesktopApi:
     def end_key_capture(self) -> dict[str, Any]:
         self._application.set_hotkey_capture(False)
         return {"ok": True}
+
+    def capture_screen_for_crop(self) -> dict[str, Any]:
+        try:
+            return {"ok": True, **self._application.capture_screen_for_crop()}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def crop_and_save_template(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            result = self._application.crop_and_save_template(
+                data_url=str(payload.get("data_url", "")),
+                left=int(payload.get("left", 0)),
+                top=int(payload.get("top", 0)),
+                width=int(payload.get("width", 0)),
+                height=int(payload.get("height", 0)),
+                filename=str(payload.get("filename", "")),
+            )
+            return {"ok": True, **result}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def test_template_match(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            result = self._application.test_template_match(
+                template_path=str(payload.get("template_path", "")),
+                confidence=float(payload.get("confidence", 0.88)),
+            )
+            return {"ok": True, **result}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def get_template_thumbnail(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self._application.get_template_thumbnail(
+                template_path=str(payload.get("template_path", "")),
+                max_size=int(payload.get("max_size", 120)),
+            )
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def pick_color(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            result = self._application.pixel_checker.pick_color(
+                x=int(payload.get("x", 0)),
+                y=int(payload.get("y", 0)),
+            )
+            return {"ok": True, **result}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def capture_fingerprint(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            anchor_x = int(payload.get("anchor_x", 0))
+            anchor_y = int(payload.get("anchor_y", 0))
+            raw_offsets = list(payload.get("offsets", []))
+            offsets = [(int(o.get("dx", 0)), int(o.get("dy", 0))) for o in raw_offsets if isinstance(o, dict)]
+            sample_points = self._application.feature_matcher.capture_fingerprint(
+                anchor_x=anchor_x,
+                anchor_y=anchor_y,
+                offsets=offsets,
+            )
+            return {"ok": True, "sample_points": sample_points}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}

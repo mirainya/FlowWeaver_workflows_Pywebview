@@ -28,6 +28,9 @@ from app.models import WorkflowBinding, WorkflowDefinition
 from app.services.async_vision import AsyncVisionManager, sanitize_async_monitor_record
 from app.services.input_controller import WindowsInputController
 from app.services.vision import SharedScreenCapture, TemplateMatcher
+from app.services.pixel_checker import PixelChecker
+from app.services.color_detector import ColorRegionDetector
+from app.services.feature_matcher import FeatureMatcher
 
 
 class AssistantApplication:
@@ -75,10 +78,16 @@ class AssistantApplication:
         self.input_controller = WindowsInputController()
         self._shared_capture = SharedScreenCapture()
         self.vision = TemplateMatcher(shared_capture=self._shared_capture)
+        self.pixel_checker = PixelChecker(shared_capture=self._shared_capture)
+        self.color_detector = ColorRegionDetector(shared_capture=self._shared_capture)
+        self.feature_matcher = FeatureMatcher(shared_capture=self._shared_capture)
         self.async_vision = AsyncVisionManager(
             project_root=project_root,
             logger=self.add_log,
             shared_capture=self._shared_capture,
+            pixel_checker=self.pixel_checker,
+            color_detector=self.color_detector,
+            feature_matcher=self.feature_matcher,
         )
         self._refresh_async_monitors()
         self.async_monitor_records = self.async_vision.get_records()
@@ -95,6 +104,9 @@ class AssistantApplication:
                 message=message,
             ),
         )
+        self.executor._pixel_checker = self.pixel_checker
+        self.executor._color_detector = self.color_detector
+        self.executor._feature_matcher = self.feature_matcher
         self.hotkeys = HotkeyManager(
             trigger_callback=self.run_workflow,
             logger=self.add_log,
@@ -270,6 +282,55 @@ class AssistantApplication:
             "filename": target_name,
         }
 
+    def capture_screen_for_crop(self) -> dict[str, str]:
+        """截取当前屏幕，返回 base64 编码的 PNG 数据 URL，供前端覆盖层使用。"""
+        import cv2 as _cv2
+
+        frame = self._shared_capture.grab()
+        success, png_buffer = _cv2.imencode(".png", frame)
+        if not success:
+            raise RuntimeError("屏幕截图编码失败。")
+        b64 = base64.b64encode(png_buffer.tobytes()).decode("ascii")
+        h, w = frame.shape[:2]
+        return {
+            "data_url": f"data:image/png;base64,{b64}",
+            "width": w,
+            "height": h,
+        }
+
+    def test_template_match(self, template_path: str, confidence: float = 0.88) -> dict:
+        """单次识图测试，返回匹配结果和标注预览图。"""
+        resolved = Path(template_path)
+        if not resolved.is_absolute():
+            resolved = self.project_root / resolved
+        if not resolved.exists():
+            raise ValueError(f"模板图片不存在：{resolved.name}")
+        return self.vision.test_template_match(
+            template_path=resolved,
+            confidence=confidence,
+        )
+
+    def crop_and_save_template(
+        self, data_url: str, left: int, top: int, width: int, height: int, filename: str = ""
+    ) -> dict[str, str]:
+        """从截屏数据中裁剪指定区域并保存为模板图片。"""
+        image_bytes = self._decode_uploaded_image(data_url)
+        with Image.open(BytesIO(image_bytes)) as img:
+            img.load()
+            crop_box = (
+                max(0, int(left)),
+                max(0, int(top)),
+                min(img.width, int(left) + int(width)),
+                min(img.height, int(top) + int(height)),
+            )
+            cropped = img.crop(crop_box)
+            buf = BytesIO()
+            cropped.save(buf, format="PNG")
+            cropped_bytes = buf.getvalue()
+
+        save_name = filename.strip() if filename else "crop"
+        return self._store_uploaded_template(f"{save_name}.png", cropped_bytes)
+
     def upload_template_image(self, filename: str, data_url: str) -> dict[str, str]:
         image_bytes = self._decode_uploaded_image(data_url)
         return self._store_uploaded_template(filename, image_bytes)
@@ -285,6 +346,29 @@ class AssistantApplication:
             raise ValueError("读取模板文件失败。") from exc
 
         return self._store_uploaded_template(resolved_source_path.name, image_bytes)
+
+    def get_template_thumbnail(self, template_path: str, max_size: int = 120) -> dict[str, Any]:
+        """返回模板图片的缩略图 data URL。"""
+        resolved = Path(template_path)
+        if not resolved.is_absolute():
+            resolved = self.project_root / resolved
+        if not resolved.exists():
+            return {"ok": False, "error": "模板图片不存在"}
+        try:
+            with Image.open(resolved) as img:
+                img.load()
+                w, h = img.size
+                ratio = min(max_size / w, max_size / h, 1.0)
+                thumb_w = max(1, int(w * ratio))
+                thumb_h = max(1, int(h * ratio))
+                thumb = img.resize((thumb_w, thumb_h), Image.LANCZOS)
+                buf = BytesIO()
+                thumb.save(buf, format="PNG")
+                import base64
+                data_url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+                return {"ok": True, "data_url": data_url, "width": w, "height": h}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
     def save_async_monitor(self, payload: dict[str, Any]) -> dict[str, Any]:
         monitor_id = str(payload.get("monitor_id", "")).strip()
@@ -544,6 +628,23 @@ class AssistantApplication:
                 workflow_id,
                 last_message=f"已点击坐标：({x}, {y})",
             )
+            return
+
+        if event_type == "step_enter":
+            self._update_runtime_state(
+                workflow_id,
+                current_step_index=int(event.get("step_index", -1)),
+                current_step_kind=str(event.get("step_kind", "")),
+            )
+            return
+
+        if event_type == "step_exit":
+            self._update_runtime_state(
+                workflow_id,
+                current_step_index=-1,
+                current_step_kind="",
+            )
+            return
 
     def get_runtime_snapshot(self) -> dict[str, Any]:
         with self._runtime_lock:
