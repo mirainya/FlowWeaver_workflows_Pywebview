@@ -261,9 +261,12 @@ function NodeEditorInner() {
     [screenToFlowPosition, setNodes, commitToStore],
   );
 
-  /* ── Delete selected (protect start node) ── */
+  /* ── Delete selected (protect start node, skip when editing input) ── */
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Don't delete nodes when user is typing in an input/textarea/select
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.key === 'Delete' || e.key === 'Backspace') {
         setNodes((nds) => nds.filter((n) => !n.selected || isStartNode(n)));
         setEdges((eds) => eds.filter((ed) => !ed.selected));

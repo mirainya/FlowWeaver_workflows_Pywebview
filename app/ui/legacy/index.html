@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="graphite">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Luoqi Assistant</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <section class="brand-card glass">
+        <h1>Luoqi Assistant</h1>
+        <p>流程编排、异步识图、运行监控。</p>
+      </section>
+
+      <section class="summary-bar glass">
+        <div class="summary-bar-row">
+          <span class="summary-item"><span class="summary-label">流程</span><strong id="workflow-count">0</strong></span>
+          <span class="summary-item"><span class="summary-label">热键</span><strong id="enabled-count">0</strong></span>
+          <span class="summary-item"><span class="summary-label">运行中</span><strong id="active-loop-count">0</strong></span>
+        </div>
+        <div class="summary-bar-row">
+          <span class="summary-item"><span class="summary-label">识图</span><strong id="visual-count">0</strong></span>
+          <span class="summary-item"><span class="summary-label">循环</span><strong id="loop-count">0</strong></span>
+        </div>
+      </section>
+
+      <section class="guide-card glass">
+        <div class="panel-head compact">
+          <div>
+            <h3>运行概览</h3>
+          </div>
+        </div>
+        <div class="runtime-overview" id="runtime-overview"></div>
+      </section>
+    </aside>
+
+    <main class="main-panel">
+      <section class="hero glass hero-compact">
+        <div>
+          <h2 id="workspace-title">流程</h2>
+          <p id="workspace-subtitle">查看、编辑和运行自动化流程。</p>
+        </div>
+        <div class="hero-side">
+          <div class="hero-chip">
+            <span>流程来源</span>
+            <strong id="workflow-source">--</strong>
+          </div>
+          <div class="hero-chip">
+            <span>当前版本</span>
+            <strong id="app-version">--</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel glass">
+        <div class="panel-head">
+          <div>
+            <h3>工作区</h3>
+          </div>
+          <div class="panel-actions">
+            <button class="ghost-button" type="button" id="refresh-button">刷新数据</button>
+          </div>
+        </div>
+
+        <div class="tab-strip" id="tab-strip"></div>
+        <div class="tab-meta" id="tab-meta"></div>
+        <div class="toast-banner" id="workspace-toast" hidden></div>
+
+        <section class="designer-panel glass" id="flow-designer-panel" hidden>
+          <div class="designer-head">
+            <div class="designer-title-group">
+              <h4 id="designer-title">新建流程</h4>
+              <p class="subtle" id="designer-subtitle">配置热键、运行模式和步骤。</p>
+            </div>
+            <div class="designer-head-side">
+              <div class="designer-status" id="designer-save-status">
+                <span class="status-badge idle" id="designer-save-badge">未修改</span>
+                <span class="status-text" id="designer-save-text">当前内容与已保存版本一致</span>
+              </div>
+              <div class="designer-actions">
+                <button class="ghost-button" type="button" id="designer-collapse" onclick="window.toggleDesignerCollapse()">收起</button>
+                <button class="ghost-button" type="button" id="designer-reset">新建流程</button>
+                <button class="primary-button" type="button" id="designer-save">保存流程</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="designer-grid">
+            <label class="field-item">
+              <span>流程名字</span>
+              <input class="control-input" id="designer-name" placeholder="例如 自动补给 / UI确认 / 连招循环" />
+            </label>
+            <label class="field-item">
+              <span>触发热键</span>
+              <input class="control-input" id="designer-hotkey" placeholder="例如 ` / alt+9 / ctrl+shift+1" />
+            </label>
+            <label class="field-item">
+              <span>运行模式</span>
+              <select class="control-input" id="designer-run-mode">
+                <option value="once">执行一次</option>
+                <option value="repeat_n">执行指定次数</option>
+                <option value="toggle_loop">开关循环</option>
+              </select>
+            </label>
+            <label class="field-item" id="designer-repeat-wrap" hidden>
+              <span>执行次数</span>
+              <input class="control-input" id="designer-repeat-count" type="number" min="1" max="100000" step="1" value="1" />
+            </label>
+            <label class="field-item field-wide">
+              <span>流程说明</span>
+              <textarea class="control-input control-area" id="designer-description" rows="3" placeholder="简要描述流程用途、前置条件或注意事项"></textarea>
+            </label>
+            <label class="toggle toggle-card">
+              <input id="designer-enabled" type="checkbox" checked />
+              保存后立即启用热键
+            </label>
+          </div>
+
+          <div class="step-toolbar">
+            <div>
+              <h4>流程步骤</h4>
+            </div>
+            <div class="step-toolbar-actions">
+              <div class="dropdown-wrap">
+                <button class="ghost-button" type="button" id="designer-template-insert">快速插入</button>
+                <div class="dropdown-menu" id="designer-template-menu" hidden></div>
+              </div>
+              <button class="ghost-button" type="button" id="designer-step-add">添加步骤</button>
+            </div>
+          </div>
+          <div class="step-index-map" id="designer-step-index" hidden></div>
+          <div class="step-root" id="designer-step-list"></div>
+        </section>
+
+        <div class="workflow-grid" id="workflow-grid"></div>
+      </section>
+
+      <section class="bottom-grid">
+        <section class="panel glass collapsible-panel" id="key-event-panel">
+          <div class="panel-head compact clickable-head" onclick="window.toggleBottomPanel('key-event-panel')">
+            <div>
+              <h3>按键记录</h3>
+            </div>
+            <span class="collapse-indicator">▾</span>
+          </div>
+          <div class="collapsible-body">
+            <div class="activity-list" id="key-event-list"></div>
+          </div>
+        </section>
+
+        <section class="panel glass collapsible-panel" id="log-panel">
+          <div class="panel-head compact clickable-head" onclick="window.toggleBottomPanel('log-panel')">
+            <div>
+              <h3>运行日志</h3>
+            </div>
+            <span class="collapse-indicator">▾</span>
+          </div>
+          <div class="collapsible-body">
+            <div class="log-list" id="log-list"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="utils.js"></script>
+  <script src="state.js"></script>
+  <script src="capture.js"></script>
+  <script src="models.js"></script>
+  <script src="capture-overlay.js"></script>
+  <script src="designer.js"></script>
+  <script src="render-designer.js"></script>
+  <script src="render-flow.js"></script>
+  <script src="render-async.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>

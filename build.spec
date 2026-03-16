@@ -7,13 +7,12 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('app/ui', 'app/ui'),
+        ('app/ui/dist', 'app/ui/dist'),
     ],
     hiddenimports=[
         'webview',
         'webview.platforms.winforms',
         'webview.platforms.edgechromium',
-        'webview.platforms.edgehtml',
         'webview.platforms.mshtml',
         'keyboard',
         'mss',

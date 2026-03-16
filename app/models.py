@@ -87,6 +87,7 @@ class WorkflowDefinition:
     run_mode: dict[str, Any] = field(default_factory=lambda: {"type": "once"})
     source: str = "builtin"
     definition_editable: bool = False
+    node_graph: dict[str, Any] | None = None
 
     def default_settings(self) -> dict[str, int]:
         return {
@@ -147,4 +148,5 @@ class WorkflowDefinition:
                 for setting in self.settings
             ],
             "actions": [action.to_dict() for action in self.actions],
+            "node_graph": self.node_graph,
         }

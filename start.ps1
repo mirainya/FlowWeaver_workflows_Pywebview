@@ -53,6 +53,63 @@ if (-not $pythonCommand) {
     $pythonLabel = 'python'
 }
 
+# ── 前端构建 ──
+$uiDir = Join-Path $PSScriptRoot 'app\ui'
+$distIndex = Join-Path $uiDir 'dist\index.html'
+$srcDir = Join-Path $uiDir 'src'
+
+# 判断是否需要重新构建：dist 不存在，或 src 比 dist 更新
+$needBuild = $false
+if (-not (Test-Path -LiteralPath $distIndex -PathType Leaf)) {
+    $needBuild = $true
+} else {
+    $distTime = (Get-Item -LiteralPath $distIndex).LastWriteTime
+    $newerFiles = Get-ChildItem -Path $srcDir -Recurse -File |
+        Where-Object { $_.LastWriteTime -gt $distTime }
+    if ($newerFiles) {
+        $needBuild = $true
+    }
+}
+
+if ($needBuild) {
+    if (-not (Test-Path -LiteralPath $distIndex -PathType Leaf)) {
+        Write-Host '[Luoqi] 首次运行，需要构建前端...'
+    } else {
+        Write-Host '[Luoqi] 检测到前端源码变更，重新构建...'
+    }
+
+    $npmInfo = Get-Command npm -ErrorAction SilentlyContinue
+    if (-not $npmInfo) {
+        Write-Host ''
+        Write-Host '[Luoqi] 未找到 npm，请先安装 Node.js 16+。'
+        Wait-AndExit -ExitCode 1
+    }
+
+    $nodeModules = Join-Path $uiDir 'node_modules'
+    if (-not (Test-Path -LiteralPath $nodeModules -PathType Container)) {
+        Write-Host '[Luoqi] 安装前端依赖...'
+        Push-Location -LiteralPath $uiDir
+        & npm install --silent
+        if ($LASTEXITCODE -ne 0) {
+            Pop-Location
+            Write-Host '[Luoqi] npm install 失败。'
+            Wait-AndExit -ExitCode 1
+        }
+        Pop-Location
+    }
+
+    Write-Host '[Luoqi] 构建前端...'
+    Push-Location -LiteralPath $uiDir
+    & npm run build
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        Write-Host '[Luoqi] 前端构建失败。'
+        Wait-AndExit -ExitCode 1
+    }
+    Pop-Location
+    Write-Host '[Luoqi] 前端构建完成。'
+}
+
 Write-Host '[Luoqi] 正在启动桌面程序...'
 & $pythonCommand 'main.py'
 $exitCode = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }

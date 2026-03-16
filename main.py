@@ -34,9 +34,11 @@ def main() -> None:
     atexit.register(application.shutdown)
     desktop_api = DesktopApi(application)
 
-    ui_entry = (project_root / 'app' / 'ui' / 'index.html').as_uri()
+    ui_dist = project_root / 'app' / 'ui' / 'dist' / 'index.html'
+    ui_fallback = project_root / 'app' / 'ui' / 'index.html'
+    ui_entry = (ui_dist if ui_dist.exists() else ui_fallback).as_uri()
     window = webview.create_window(
-        title='Luoqi Assistant',
+        title='织流 FlowWeaver',
         url=ui_entry,
         js_api=desktop_api,
         width=1440,
