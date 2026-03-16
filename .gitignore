@@ -59,6 +59,12 @@ data/
 
 # AI assistant configurations
 .claude/
+CLAUDE.md
+PLAN.md
+
+# Frontend build output
+app/ui/dist/
+app/ui/node_modules/
 
 # Cache and runtime directories
 __pycache__/
