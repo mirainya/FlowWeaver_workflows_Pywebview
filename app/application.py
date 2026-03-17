@@ -14,6 +14,7 @@ from uuid import uuid4
 from PIL import Image, UnidentifiedImageError
 
 from app.config_store import ConfigStore
+from app.workflow_store import WorkflowStore
 from app.core.executor import WorkflowExecutor
 from app.core.hotkeys import HotkeyManager
 from app.core.workflows import (
@@ -23,6 +24,7 @@ from app.core.workflows import (
     extract_shared_variable_names,
     get_tab_definitions,
     iter_action_payloads,
+    serialize_custom_flow_workflow,
 )
 from app.models import WorkflowBinding, WorkflowDefinition
 from app.services.async_vision import AsyncVisionManager, sanitize_async_monitor_record
@@ -45,10 +47,19 @@ class AssistantApplication:
         self._key_events: deque[dict[str, str]] = deque(maxlen=120)
 
         self.config_store = ConfigStore(project_root / "data" / "config.json")
+        self.workflow_store = WorkflowStore(project_root / "data" / "workflows")
+
+        # 自动迁移：从旧 config.json 提取 flows 到独立文件
+        migrated_count = self.config_store.migrate_flows_to_files(self.workflow_store)
+        if migrated_count > 0:
+            self.add_log(f"已从 config.json 迁移 {migrated_count} 个工作流到独立文件。", "success")
+
         loaded = self.config_store.load_all()
         self.async_monitor_records = loaded["async_monitor_records"]
         self.custom_flow_presets_seeded = loaded["custom_flow_presets_seeded"]
-        custom_flow_records = loaded["custom_flow_records"]
+
+        # 从独立文件加载自定义工作流
+        custom_flow_records = self.workflow_store.load_all_records()
         if not self.custom_flow_presets_seeded:
             existing_ids = {
                 str(record.get("workflow_id", "")).strip()
@@ -58,6 +69,8 @@ class AssistantApplication:
             for record in build_preset_custom_flow_records(project_root):
                 workflow_id = str(record.get("workflow_id", "")).strip()
                 if workflow_id and workflow_id not in existing_ids:
+                    record["version"] = record.get("version", 1)
+                    self.workflow_store.save_record(record)
                     custom_flow_records.append(record)
             self.custom_flow_presets_seeded = True
         self.builtin_workflows: list[WorkflowDefinition] = []
@@ -191,7 +204,6 @@ class AssistantApplication:
     def _save_state(self) -> None:
         self.config_store.save_state(
             builtin_workflows=self.builtin_workflows,
-            custom_workflows=self.custom_workflows,
             bindings=self.bindings,
             settings=self.settings,
             async_monitor_records=self.async_monitor_records,
@@ -671,6 +683,15 @@ class AssistantApplication:
         self._rebuild_workflow_catalog()
         self.bindings[workflow_id] = WorkflowBinding(hotkey=hotkey, enabled=enabled)
         self.settings[workflow_id] = {}
+
+        # 保存工作流到独立文件
+        file_record = serialize_custom_flow_workflow(
+            workflow,
+            self.bindings[workflow_id],
+        )
+        file_record["version"] = 1
+        self.workflow_store.save_record(file_record)
+
         self._save_state()
         self.reload_hotkeys()
         self._refresh_async_monitors()
@@ -716,6 +737,7 @@ class AssistantApplication:
         with self._runtime_lock:
             self.runtime_states.pop(workflow_id, None)
         self._rebuild_workflow_catalog()
+        self.workflow_store.delete_record(workflow_id)
         self._save_state()
         self.reload_hotkeys()
         self._refresh_async_monitors()

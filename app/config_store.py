@@ -1,13 +1,15 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 from pathlib import Path
 from typing import Any
 
-from app.core.workflows import serialize_custom_flow_workflow
 from app.models import WorkflowBinding, WorkflowDefinition
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigStore:
@@ -19,7 +21,6 @@ class ConfigStore:
             "bindings": {},
             "settings": {},
             "custom_workflows": {
-                "flows": [],
                 "sample_presets_seeded": False,
             },
             "async_vision": {
@@ -84,11 +85,6 @@ class ConfigStore:
             "custom_flow_presets_seeded": bool(
                 payload["custom_workflows"].get("sample_presets_seeded", False)
             ),
-            "custom_flow_records": [
-                dict(record)
-                for record in payload["custom_workflows"].get("flows", [])
-                if isinstance(record, dict)
-            ],
         }
 
     def load_state(
@@ -137,7 +133,6 @@ class ConfigStore:
     def save_state(
         self,
         builtin_workflows: list[WorkflowDefinition],
-        custom_workflows: list[WorkflowDefinition],
         bindings: dict[str, WorkflowBinding],
         settings: dict[str, dict[str, Any]],
         async_monitor_records: list[dict[str, Any]],
@@ -157,16 +152,6 @@ class ConfigStore:
             for workflow_id, values in settings.items()
             if workflow_id in builtin_ids and values
         }
-        payload["custom_workflows"]["flows"] = [
-            serialize_custom_flow_workflow(
-                workflow,
-                bindings.get(
-                    workflow.workflow_id,
-                    WorkflowBinding(hotkey=workflow.default_hotkey, enabled=True),
-                ),
-            )
-            for workflow in custom_workflows
-        ]
         payload["custom_workflows"]["sample_presets_seeded"] = bool(custom_flow_presets_seeded)
         payload["async_vision"]["monitors"] = [
             dict(record)
@@ -195,3 +180,49 @@ class ConfigStore:
                 raise
         except OSError:
             self._config_path.write_text(content, encoding="utf-8")
+
+    def migrate_flows_to_files(self, workflow_store: Any) -> int:
+        """从旧 config.json 提取 flows 到独立文件，幂等操作。"""
+        if not self._config_path.exists():
+            return 0
+        try:
+            raw_payload = json.loads(self._config_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return 0
+        if not isinstance(raw_payload, dict):
+            return 0
+        custom_section = raw_payload.get("custom_workflows")
+        if not isinstance(custom_section, dict):
+            return 0
+        flows = custom_section.get("flows")
+        if not isinstance(flows, list) or not flows:
+            return 0
+
+        migrated = 0
+        existing_records = {
+            str(r.get("workflow_id", "")).strip()
+            for r in workflow_store.load_all_records()
+        }
+        for record in flows:
+            if not isinstance(record, dict):
+                continue
+            wid = str(record.get("workflow_id", "")).strip()
+            if not wid or wid in existing_records:
+                continue
+            record["version"] = record.get("version", 1)
+            try:
+                workflow_store.save_record(record)
+                migrated += 1
+                logger.info("已迁移工作流到独立文件: %s", wid)
+            except Exception as exc:
+                logger.warning("迁移工作流失败 %s: %s", wid, exc)
+
+        if migrated > 0:
+            custom_section.pop("flows", None)
+            content = json.dumps(raw_payload, ensure_ascii=False, indent=2)
+            try:
+                self._config_path.write_text(content, encoding="utf-8")
+            except OSError as exc:
+                logger.warning("更新 config.json 失败: %s", exc)
+            logger.info("已从 config.json 迁移 %d 个工作流到独立文件", migrated)
+        return migrated

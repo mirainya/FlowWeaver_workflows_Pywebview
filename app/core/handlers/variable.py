@@ -11,22 +11,19 @@ if TYPE_CHECKING:
 class VariableHandlersMixin:
     """处理变量动作：if_var_found, if_condition, set_variable_state, set_variable"""
 
-    def _handle_if_var_found(
+    def _evaluate_if_var_found(
         self,
         workflow_id: str,
         params: dict[str, Any],
-        workflow_settings: dict[str, Any],
         context: dict[str, Any],
-        stop_event: Event | None,
-    ) -> None:
+    ) -> bool:
+        """仅评估 if_var_found 条件并发事件，不执行分支步骤。"""
         var_name = str(params.get("var_name", "target")).strip() or "target"
         variable_scope = str(params.get("variable_scope", "local")).strip()
         if variable_scope not in {"local", "shared"}:
             variable_scope = "local"
         branch_value = self._resolve_variable(variable_scope, var_name, context) or {}
         found = bool(branch_value.get("found"))
-        branch_key = "then_steps" if found else "else_steps"
-        branch_steps = [self._coerce_action(item) for item in list(params.get(branch_key, []))]
         self._emit_runtime_event(
             workflow_id,
             {
@@ -36,6 +33,19 @@ class VariableHandlersMixin:
                 "message": f"条件 {var_name}.found = {'true' if found else 'false'}，进入 {'then' if found else 'else'} 分支。",
             },
         )
+        return found
+
+    def _handle_if_var_found(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        workflow_settings: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None,
+    ) -> None:
+        found = self._evaluate_if_var_found(workflow_id, params, context)
+        branch_key = "then_steps" if found else "else_steps"
+        branch_steps = [self._coerce_action(item) for item in list(params.get(branch_key, []))]
         self._execute_steps(workflow_id, branch_steps, workflow_settings, context, stop_event)
 
     def _evaluate_condition(self, variable_scope: str, var_name: str, field: str, operator: str, value: str, context: dict[str, Any]) -> bool:
@@ -68,14 +78,13 @@ class VariableHandlersMixin:
             return actual_str != value_str
         return False
 
-    def _handle_if_condition(
+    def _evaluate_if_condition_result(
         self,
         workflow_id: str,
         params: dict[str, Any],
-        workflow_settings: dict[str, Any],
         context: dict[str, Any],
-        stop_event: Event | None,
-    ) -> None:
+    ) -> bool:
+        """仅评估 if_condition 条件并发事件，不执行分支步骤。"""
         var_name = str(params.get("var_name", "target")).strip() or "target"
         variable_scope = str(params.get("variable_scope", "local")).strip()
         if variable_scope not in {"local", "shared"}:
@@ -86,8 +95,6 @@ class VariableHandlersMixin:
             operator = "=="
         value = str(params.get("value", "true")).strip()
         result = self._evaluate_condition(variable_scope, var_name, field, operator, value, context)
-        branch_key = "then_steps" if result else "else_steps"
-        branch_steps = [self._coerce_action(item) for item in list(params.get(branch_key, []))]
         self._emit_runtime_event(
             workflow_id,
             {
@@ -98,6 +105,19 @@ class VariableHandlersMixin:
                 "message": f"条件 {var_name}.{field} {operator} {value} = {'true' if result else 'false'}，进入 {'then' if result else 'else'} 分支。",
             },
         )
+        return result
+
+    def _handle_if_condition(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        workflow_settings: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None,
+    ) -> None:
+        result = self._evaluate_if_condition_result(workflow_id, params, context)
+        branch_key = "then_steps" if result else "else_steps"
+        branch_steps = [self._coerce_action(item) for item in list(params.get(branch_key, []))]
         self._execute_steps(workflow_id, branch_steps, workflow_settings, context, stop_event)
 
     def _handle_set_variable_state(

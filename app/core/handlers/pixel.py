@@ -9,16 +9,17 @@ if TYPE_CHECKING:
 class PixelHandlersMixin:
     """处理像素检测动作：check_pixels, check_region_color, detect_color_region, match_fingerprint"""
 
-    def _handle_check_pixels(
+    def _do_check_pixels(
         self,
         workflow_id: str,
         params: dict[str, Any],
         workflow_settings: dict[str, Any],
         context: dict[str, Any],
         stop_event: Event | None = None,
-    ) -> None:
+    ) -> bool:
+        """执行多点像素检测并存储结果，返回 found。不执行分支。"""
         if stop_event is not None and stop_event.is_set():
-            return
+            return False
         if self._pixel_checker is None:
             raise RuntimeError("PixelChecker 未初始化")
         points = list(params.get("points", []))
@@ -36,10 +37,9 @@ class PixelHandlersMixin:
                 "save_as": save_as,
             },
         )
+        return result["found"]
 
-        self._execute_visual_branch(workflow_id, params, result["found"], workflow_settings, context, stop_event)
-
-    def _handle_check_region_color(
+    def _handle_check_pixels(
         self,
         workflow_id: str,
         params: dict[str, Any],
@@ -47,8 +47,20 @@ class PixelHandlersMixin:
         context: dict[str, Any],
         stop_event: Event | None = None,
     ) -> None:
+        found = self._do_check_pixels(workflow_id, params, workflow_settings, context, stop_event)
+        self._execute_visual_branch(workflow_id, params, found, workflow_settings, context, stop_event)
+
+    def _do_check_region_color(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        workflow_settings: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None = None,
+    ) -> bool:
+        """执行区域颜色检测并存储结果，返回 found。不执行分支。"""
         if stop_event is not None and stop_event.is_set():
-            return
+            return False
         if self._pixel_checker is None:
             raise RuntimeError("PixelChecker 未初始化")
         save_as = str(params.get("save_as", "region_color_result")).strip() or "region_color_result"
@@ -71,10 +83,9 @@ class PixelHandlersMixin:
                 "save_as": save_as,
             },
         )
+        return result["found"]
 
-        self._execute_visual_branch(workflow_id, params, result["found"], workflow_settings, context, stop_event)
-
-    def _handle_detect_color_region(
+    def _handle_check_region_color(
         self,
         workflow_id: str,
         params: dict[str, Any],
@@ -82,8 +93,20 @@ class PixelHandlersMixin:
         context: dict[str, Any],
         stop_event: Event | None = None,
     ) -> None:
+        found = self._do_check_region_color(workflow_id, params, workflow_settings, context, stop_event)
+        self._execute_visual_branch(workflow_id, params, found, workflow_settings, context, stop_event)
+
+    def _do_detect_color_region_hsv(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        workflow_settings: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None = None,
+    ) -> bool:
+        """执行 HSV 颜色区域检测并存储结果，返回 found。不执行分支。"""
         if stop_event is not None and stop_event.is_set():
-            return
+            return False
         if self._color_detector is None:
             raise RuntimeError("ColorRegionDetector 未初始化")
         save_as = str(params.get("save_as", "color_region_result")).strip() or "color_region_result"
@@ -116,10 +139,9 @@ class PixelHandlersMixin:
                 "save_as": save_as,
             },
         )
+        return result["found"]
 
-        self._execute_visual_branch(workflow_id, params, result["found"], workflow_settings, context, stop_event)
-
-    def _handle_match_fingerprint(
+    def _handle_detect_color_region(
         self,
         workflow_id: str,
         params: dict[str, Any],
@@ -127,8 +149,20 @@ class PixelHandlersMixin:
         context: dict[str, Any],
         stop_event: Event | None = None,
     ) -> None:
+        found = self._do_detect_color_region_hsv(workflow_id, params, workflow_settings, context, stop_event)
+        self._execute_visual_branch(workflow_id, params, found, workflow_settings, context, stop_event)
+
+    def _do_match_fingerprint(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        workflow_settings: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None = None,
+    ) -> bool:
+        """执行特征指纹匹配并存储结果，返回 found。不执行分支。"""
         if stop_event is not None and stop_event.is_set():
-            return
+            return False
         if self._feature_matcher is None:
             raise RuntimeError("FeatureMatcher 未初始化")
         save_as = str(params.get("save_as", "fingerprint_result")).strip() or "fingerprint_result"
@@ -149,5 +183,15 @@ class PixelHandlersMixin:
                 "save_as": save_as,
             },
         )
+        return result["found"]
 
-        self._execute_visual_branch(workflow_id, params, result["found"], workflow_settings, context, stop_event)
+    def _handle_match_fingerprint(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        workflow_settings: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None = None,
+    ) -> None:
+        found = self._do_match_fingerprint(workflow_id, params, workflow_settings, context, stop_event)
+        self._execute_visual_branch(workflow_id, params, found, workflow_settings, context, stop_event)

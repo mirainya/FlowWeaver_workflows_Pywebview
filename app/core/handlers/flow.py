@@ -9,6 +9,35 @@ if TYPE_CHECKING:
 class FlowHandlersMixin:
     """处理流程控制动作：loop, call_workflow, key_hold"""
 
+    def _get_loop_config(self, params: dict[str, Any]) -> dict[str, Any]:
+        """解析循环参数，返回 loop_type / max_iterations / var_name / variable_scope / expect_found。"""
+        loop_type = str(params.get("loop_type", "count")).strip()
+        max_iterations = max(1, int(params.get("max_iterations", 10)))
+        config: dict[str, Any] = {
+            "loop_type": loop_type,
+            "max_iterations": max_iterations,
+        }
+        if loop_type != "count":
+            var_name = str(params.get("var_name", "target")).strip() or "target"
+            variable_scope = str(params.get("variable_scope", "local")).strip()
+            if variable_scope not in {"local", "shared"}:
+                variable_scope = "local"
+            config["var_name"] = var_name
+            config["variable_scope"] = variable_scope
+            config["expect_found"] = loop_type == "while_found"
+        return config
+
+    def _check_loop_continue(self, config: dict[str, Any], context: dict[str, Any], iteration: int) -> bool:
+        """判断是否继续循环。"""
+        if iteration >= config["max_iterations"]:
+            return False
+        if config["loop_type"] == "count":
+            return True
+        var_name = config["var_name"]
+        variable_scope = config["variable_scope"]
+        val = self._resolve_variable(variable_scope, var_name, context) or {}
+        return bool(val.get("found")) == config["expect_found"]
+
     def _handle_loop(
         self,
         workflow_id: str,

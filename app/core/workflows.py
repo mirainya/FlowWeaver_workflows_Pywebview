@@ -190,6 +190,7 @@ def serialize_custom_flow_workflow(
     binding: WorkflowBinding,
 ) -> dict[str, Any]:
     return {
+        "version": 1,
         "workflow_id": workflow.workflow_id,
         "name": workflow.name,
         "description": workflow.description,

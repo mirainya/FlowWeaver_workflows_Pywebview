@@ -9,6 +9,7 @@ from typing import Any, Callable
 from app.models import ActionDefinition, WorkflowDefinition
 from app.services.input_controller import WindowsInputController
 from app.services.vision import TemplateMatcher
+from app.core.graph_executor import GraphRunner
 
 from app.core.handlers.basic import BasicHandlersMixin
 from app.core.handlers.mouse import MouseHandlersMixin
@@ -54,6 +55,7 @@ class WorkflowExecutor(
         self._loop_stops: dict[str, Event] = {}
         self._toggle_cooldown: dict[str, float] = {}
         self._toggle_cooldown_seconds = 0.5
+        self._graph_runner = GraphRunner(self)
 
     # ── Event emission ──
 
@@ -163,6 +165,19 @@ class WorkflowExecutor(
         wid = workflow.workflow_id
         from threading import Lock as _Lock
         context: dict[str, Any] = {"vars": {}, "vars_lock": _Lock(), "last_match": None}
+
+        use_graph = (
+            workflow.node_graph is not None
+            and isinstance(workflow.node_graph.get("nodes"), list)
+            and len(workflow.node_graph["nodes"]) > 0
+        )
+
+        def _run_once() -> None:
+            if use_graph:
+                self._graph_runner.execute(wid, workflow.node_graph, workflow_settings, context, stop_event)
+            else:
+                self._execute_steps(wid, workflow.actions, workflow_settings, context, stop_event)
+
         try:
             self._emit_runtime_event(wid, {"type": "start", "message": f"开始执行：{workflow.name}"})
             self._logger(f"开始执行流程：{workflow.name} ({self._run_mode_message(run_mode)})", "info")
@@ -173,7 +188,7 @@ class WorkflowExecutor(
                 while not stop_event.is_set():
                     iteration += 1
                     self._emit_runtime_event(wid, {"type": "loop_iteration", "iteration": iteration})
-                    self._execute_steps(wid, workflow.actions, workflow_settings, context, stop_event)
+                    _run_once()
                     if stop_event.is_set():
                         break
                     delay_ms = int(run_mode.get("loop_delay_ms", 50))
@@ -185,9 +200,9 @@ class WorkflowExecutor(
                     if stop_event.is_set():
                         break
                     self._emit_runtime_event(wid, {"type": "run_count", "current": i + 1, "total": count})
-                    self._execute_steps(wid, workflow.actions, workflow_settings, context, stop_event)
+                    _run_once()
             else:
-                self._execute_steps(wid, workflow.actions, workflow_settings, context, stop_event)
+                _run_once()
 
         except Exception as exc:
             self._logger(f"流程执行出错：{exc}", "error")

@@ -12,14 +12,15 @@ if TYPE_CHECKING:
 class VisionHandlersMixin:
     """处理视觉检测动作：detect_image, detect_click_return, detect_color, detect_color_region"""
 
-    def _handle_detect_image(
+    def _do_detect_image(
         self,
         workflow_id: str,
         params: dict[str, Any],
         workflow_settings: dict[str, Any],
         context: dict[str, Any],
         stop_event: Event | None = None,
-    ) -> None:
+    ) -> bool:
+        """执行识图检测并存储结果到变量，返回 found 状态。不执行分支。"""
         raw_template_path = str(params.get("template_path", "")).strip()
         if not raw_template_path:
             raise ValueError("识图动作缺少 template_path 参数")
@@ -82,7 +83,17 @@ class VisionHandlersMixin:
             )
         else:
             self._logger(f"识图未命中：{template_path.name}，变量 {save_as}", "warn")
+        return found
 
+    def _handle_detect_image(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        workflow_settings: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None = None,
+    ) -> None:
+        found = self._do_detect_image(workflow_id, params, workflow_settings, context, stop_event)
         self._execute_visual_branch(workflow_id, params, found, workflow_settings, context, stop_event)
 
     def _handle_detect_click_return(
@@ -117,16 +128,17 @@ class VisionHandlersMixin:
             stop_event,
         )
 
-    def _handle_detect_color(
+    def _do_detect_color(
         self,
         workflow_id: str,
         params: dict[str, Any],
         workflow_settings: dict[str, Any],
         context: dict[str, Any],
         stop_event: Event | None = None,
-    ) -> None:
+    ) -> bool:
+        """执行颜色检测并存储结果，返回 matched 状态。不执行分支。"""
         if stop_event is not None and stop_event.is_set():
-            return
+            return False
 
         source = str(params.get("source", "absolute")).strip()
         if source == "var":
@@ -188,10 +200,9 @@ class VisionHandlersMixin:
                 "save_as": save_as,
             },
         )
+        return matched
 
-        self._execute_visual_branch(workflow_id, params, matched, workflow_settings, context, stop_event)
-
-    def _handle_detect_color_region(
+    def _handle_detect_color(
         self,
         workflow_id: str,
         params: dict[str, Any],
@@ -199,8 +210,20 @@ class VisionHandlersMixin:
         context: dict[str, Any],
         stop_event: Event | None = None,
     ) -> None:
+        matched = self._do_detect_color(workflow_id, params, workflow_settings, context, stop_event)
+        self._execute_visual_branch(workflow_id, params, matched, workflow_settings, context, stop_event)
+
+    def _do_detect_color_region(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        workflow_settings: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None = None,
+    ) -> bool:
+        """执行 HSV 颜色区域检测并存储结果，返回 found 状态。不执行分支。"""
         if stop_event is not None and stop_event.is_set():
-            return
+            return False
         if self._color_detector is None:
             raise RuntimeError("ColorRegionDetector 未初始化")
         save_as = str(params.get("save_as", "color_region_result")).strip() or "color_region_result"
@@ -227,10 +250,9 @@ class VisionHandlersMixin:
                 "save_as": save_as,
             },
         )
+        return result["found"]
 
-        self._execute_visual_branch(workflow_id, params, result["found"], workflow_settings, context, stop_event)
-
-    def _handle_async_detect(
+    def _handle_detect_color_region(
         self,
         workflow_id: str,
         params: dict[str, Any],
@@ -238,7 +260,18 @@ class VisionHandlersMixin:
         context: dict[str, Any],
         stop_event: Event | None = None,
     ) -> None:
-        """后台识图步骤：在单独线程中循环模板匹配，主线程等待结果或超时。"""
+        found = self._do_detect_color_region(workflow_id, params, workflow_settings, context, stop_event)
+        self._execute_visual_branch(workflow_id, params, found, workflow_settings, context, stop_event)
+
+    def _do_async_detect(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        workflow_settings: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None = None,
+    ) -> bool:
+        """执行后台识图检测并存储结果，返回 found 状态。不执行分支。"""
         raw_template_path = str(params.get("template_path", "")).strip()
         if not raw_template_path:
             raise ValueError("后台识图缺少 template_path 参数")
@@ -247,7 +280,6 @@ class VisionHandlersMixin:
         if not template_path.exists():
             raise FileNotFoundError(f"模板图片不存在：{template_path}")
 
-        # Match mode → confidence
         match_mode = str(params.get("match_mode", "normal")).strip()
         mode_confidence_map = {"loose": 0.82, "normal": 0.88, "strict": 0.94}
         if match_mode == "custom":
@@ -255,7 +287,6 @@ class VisionHandlersMixin:
         else:
             confidence = mode_confidence_map.get(match_mode, 0.88)
 
-        # Scan rate → interval
         scan_rate = str(params.get("scan_rate", "normal")).strip()
         rate_interval_map = {"low": 900, "normal": 350, "high": 150, "ultra": 30}
         if scan_rate == "custom":
@@ -270,7 +301,6 @@ class VisionHandlersMixin:
         search_step = max(1, int(params.get("search_step", 4)))
         not_found_action = str(params.get("not_found_action", "mark_missing")).strip()
 
-        # Search region
         search_region: dict[str, int] | None = None
         search_scope = str(params.get("search_scope", "full_screen")).strip()
         if search_scope == "fixed_region":
@@ -303,7 +333,6 @@ class VisionHandlersMixin:
             "info",
         )
 
-        # Result container shared between threads
         result_holder: dict[str, Any] = {"result": None}
         detect_stop = _Event()
 
@@ -329,7 +358,6 @@ class VisionHandlersMixin:
         worker = Thread(target=_detect_loop, daemon=True)
         worker.start()
 
-        # Wait for result or timeout
         deadline = time.monotonic() + timeout_ms / 1000
         while worker.is_alive() and time.monotonic() < deadline:
             if stop_event is not None and stop_event.is_set():
@@ -341,7 +369,6 @@ class VisionHandlersMixin:
         detect_stop.set()
         worker.join(timeout=1.0)
 
-        # Handle result based on not_found_action
         if result_holder["result"]:
             result = result_holder["result"]
         elif not_found_action == "keep_last":
@@ -369,5 +396,15 @@ class VisionHandlersMixin:
             )
         else:
             self._logger(f"后台识图超时未命中：{template_path.name}，变量 {save_as}", "warn")
+        return found
 
+    def _handle_async_detect(
+        self,
+        workflow_id: str,
+        params: dict[str, Any],
+        workflow_settings: dict[str, Any],
+        context: dict[str, Any],
+        stop_event: Event | None = None,
+    ) -> None:
+        found = self._do_async_detect(workflow_id, params, workflow_settings, context, stop_event)
         self._execute_visual_branch(workflow_id, params, found, workflow_settings, context, stop_event)
