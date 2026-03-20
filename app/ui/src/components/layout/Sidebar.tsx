@@ -1,10 +1,10 @@
-import { useAppStore } from '../../stores/app';
+import { useAppStore, isWorkflowVisibleInRuntime, runtimeBadgeTone } from '../../stores/app';
 
 export default function Sidebar() {
   const { summary, runtime, workflows } = useAppStore();
 
   const activeWorkflows = Object.entries(runtime.workflow_states ?? {}).filter(
-    ([, ws]) => ws.active,
+    ([, ws]) => isWorkflowVisibleInRuntime(ws),
   );
 
   return (
@@ -54,7 +54,7 @@ export default function Sidebar() {
               return (
                 <div className="runtime-row" key={wfId}>
                   <span className="label">{wf?.name ?? wfId}</span>
-                  <span className={`runtime-badge ${ws.active ? 'running' : 'idle'}`}>
+                  <span className={`runtime-badge ${runtimeBadgeTone(ws.status)}`}>
                     {ws.status_label}
                   </span>
                 </div>

@@ -50,7 +50,8 @@ PRESET_DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "custom": {
         "search_scope": "full_screen",
-        "scan_rate": "normal",
+        "scan_rate": "custom",
+        "custom_interval_ms": 350,
         "not_found_action": "keep_last",
         "match_mode": "custom",
         "custom_confidence": 0.88,
@@ -65,12 +66,43 @@ SCAN_RATE_INTERVAL_MS = {
     "normal": 350,
     "high": 150,
     "ultra": 30,
+    "custom": 350,
 }
 
 MATCH_MODE_CONFIDENCE = {
     "loose": 0.82,
     "normal": 0.88,
     "strict": 0.94,
+}
+
+MATCH_TYPE_ALIASES = {
+    "pixel": "check_pixels",
+    "region_color": "check_region_color",
+    "hsv": "detect_color_region",
+    "fingerprint": "match_fingerprint",
+}
+
+SEARCH_SCOPE_ALIASES = {
+    "region": "fixed_region",
+}
+
+NOT_FOUND_ACTION_ALIASES = {
+    "clear": "mark_missing",
+}
+
+MATCH_MODE_ALIASES = {
+    "default": "normal",
+    "custom_confidence": "custom",
+}
+
+SCAN_RATE_ALIASES = {
+    900: "low",
+    350: "normal",
+    300: "normal",
+    150: "high",
+    30: "ultra",
+    800: "low",
+    500: "normal",
 }
 
 
@@ -93,17 +125,31 @@ def _clamp_float(value: Any, default: float, minimum: float, maximum: float) -> 
 def _sanitize_region(raw_region: Any) -> dict[str, int]:
     if not isinstance(raw_region, dict):
         raw_region = {}
+    left = raw_region.get("left", raw_region.get("x", 0))
+    top = raw_region.get("top", raw_region.get("y", 0))
+    width = raw_region.get("width", raw_region.get("w", 0))
+    height = raw_region.get("height", raw_region.get("h", 0))
     return {
-        "left": _clamp_int(raw_region.get("left", 0), 0, 0, 100000),
-        "top": _clamp_int(raw_region.get("top", 0), 0, 0, 100000),
-        "width": _clamp_int(raw_region.get("width", 0), 0, 0, 100000),
-        "height": _clamp_int(raw_region.get("height", 0), 0, 0, 100000),
+        "left": _clamp_int(left, 0, 0, 100000),
+        "top": _clamp_int(top, 0, 0, 100000),
+        "width": _clamp_int(width, 0, 0, 100000),
+        "height": _clamp_int(height, 0, 0, 100000),
     }
 
 
-def _resolve_enum(raw_value: Any, allowed: set[str], default: str) -> str:
+def _resolve_enum(raw_value: Any, allowed: set[str], default: str, aliases: dict[Any, str] | None = None) -> str:
     value = str(raw_value or "").strip()
+    if aliases is not None:
+        value = aliases.get(value, aliases.get(raw_value, value))
     return value if value in allowed else default
+
+
+def _normalize_scan_rate(raw_value: Any, default: str) -> str:
+    if isinstance(raw_value, (int, float)):
+        if int(raw_value) in SCAN_RATE_ALIASES:
+            return SCAN_RATE_ALIASES[int(raw_value)]
+        return "custom"
+    return _resolve_enum(raw_value, set(SCAN_RATE_INTERVAL_MS.keys()), default)
 
 
 def _effective_confidence(monitor: dict[str, Any]) -> float:
@@ -114,7 +160,10 @@ def _effective_confidence(monitor: dict[str, Any]) -> float:
 
 
 def _effective_interval_ms(monitor: dict[str, Any]) -> int:
-    return SCAN_RATE_INTERVAL_MS.get(str(monitor.get("scan_rate", "normal")), 350)
+    scan_rate = str(monitor.get("scan_rate", "normal"))
+    if scan_rate == "custom":
+        return _clamp_int(monitor.get("custom_interval_ms", 350), 350, 16, 60000)
+    return SCAN_RATE_INTERVAL_MS.get(scan_rate, 350)
 
 
 def _sanitize_pixel_points(raw: Any) -> list[dict[str, Any]]:
@@ -203,33 +252,42 @@ def sanitize_async_monitor_record(raw_record: Any) -> dict[str, Any] | None:
         raw_record.get("match_type", "template"),
         {"template", "check_pixels", "check_region_color", "detect_color_region", "match_fingerprint"},
         "template",
+        aliases=MATCH_TYPE_ALIASES,
     )
     search_scope = _resolve_enum(
         raw_record.get("search_scope", defaults.get("search_scope")),
         {"full_screen", "fixed_region", "follow_last"},
         str(defaults.get("search_scope", "full_screen")),
+        aliases=SEARCH_SCOPE_ALIASES,
     )
     fixed_region = _sanitize_region(raw_record.get("fixed_region"))
-    scan_rate = _resolve_enum(
+    scan_rate = _normalize_scan_rate(
         raw_record.get("scan_rate", defaults.get("scan_rate")),
-        set(SCAN_RATE_INTERVAL_MS.keys()),
         str(defaults.get("scan_rate", "normal")),
     )
     not_found_action = _resolve_enum(
         raw_record.get("not_found_action", defaults.get("not_found_action")),
         {"keep_last", "mark_missing"},
         str(defaults.get("not_found_action", "keep_last")),
+        aliases=NOT_FOUND_ACTION_ALIASES,
     )
     match_mode = _resolve_enum(
         raw_record.get("match_mode", defaults.get("match_mode")),
         {"loose", "normal", "strict", "custom"},
         str(defaults.get("match_mode", "normal")),
+        aliases=MATCH_MODE_ALIASES,
     )
     custom_confidence = _clamp_float(
         raw_record.get("custom_confidence", defaults.get("custom_confidence", 0.88)),
         float(defaults.get("custom_confidence", 0.88)),
         0.55,
         0.99,
+    )
+    custom_interval_ms = _clamp_int(
+        raw_record.get("custom_interval_ms", defaults.get("custom_interval_ms", SCAN_RATE_INTERVAL_MS.get("normal", 350))),
+        int(defaults.get("custom_interval_ms", SCAN_RATE_INTERVAL_MS.get("normal", 350))),
+        16,
+        60000,
     )
     follow_radius = _clamp_int(
         raw_record.get("follow_radius", defaults.get("follow_radius", 220)),
@@ -270,6 +328,7 @@ def sanitize_async_monitor_record(raw_record: Any) -> dict[str, Any] | None:
         "not_found_action": not_found_action,
         "match_mode": match_mode,
         "custom_confidence": custom_confidence,
+        "custom_interval_ms": custom_interval_ms,
         "follow_radius": follow_radius,
         "recover_after_misses": recover_after_misses,
         "stale_after_ms": stale_after_ms,
@@ -284,5 +343,8 @@ def sanitize_async_monitor_record(raw_record: Any) -> dict[str, Any] | None:
                 "custom_confidence": custom_confidence,
             }
         ),
-        "effective_interval_ms": _effective_interval_ms({"scan_rate": scan_rate}),
+        "effective_interval_ms": _effective_interval_ms({
+            "scan_rate": scan_rate,
+            "custom_interval_ms": custom_interval_ms,
+        }),
     }

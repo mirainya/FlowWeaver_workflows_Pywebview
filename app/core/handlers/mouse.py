@@ -48,27 +48,28 @@ class MouseHandlersMixin:
         click_count = max(1, min(5, int(params.get("click_count", 1))))
         modifiers = list(params.get("modifiers", []))
 
-        saved_pos = self._input.get_cursor_position() if return_cursor else None
+        modifier_delay_ms = max(0, int(params.get("modifier_delay_ms", 50)))
+        activation_settle_ms = max(0, int(params.get("activation_settle_ms", 120)))
+        between_click_ms = max(0, int(params.get("between_click_ms", 70)))
+        press_ms = max(0, int(params.get("press_ms", 35)))
+        release_settle_ms = max(0, int(params.get("release_settle_ms", 20)))
+        pre_activate = bool(params.get("pre_activate", True))
+        normalized_modifiers = [mod for mod in modifiers if mod in {"ctrl", "shift", "alt"}]
 
-        if modifiers:
-            modifier_delay_ms = max(0, int(params.get("modifier_delay_ms", 50)))
-            for mod in modifiers:
-                if mod in {"ctrl", "shift", "alt"}:
-                    self._input.press_key(mod)
-            if modifier_delay_ms > 0:
-                time.sleep(modifier_delay_ms / 1000)
-
-        try:
-            self._input.move_to(final_x, final_y)
-            if settle_ms > 0:
-                time.sleep(settle_ms / 1000)
-            for _ in range(click_count):
-                self._input.click(button=button)
-        finally:
-            if modifiers:
-                for mod in reversed(modifiers):
-                    if mod in {"ctrl", "shift", "alt"}:
-                        self._input.release_key(mod)
+        self._input.click_at(
+            target_position=(final_x, final_y),
+            button=button,
+            settle_ms=settle_ms,
+            return_cursor=return_cursor,
+            modifiers=normalized_modifiers,
+            modifier_delay_ms=modifier_delay_ms,
+            click_count=click_count,
+            pre_activate=pre_activate,
+            activation_settle_ms=activation_settle_ms,
+            between_click_ms=between_click_ms,
+            press_ms=press_ms,
+            release_settle_ms=release_settle_ms,
+        )
 
         self._emit_runtime_event(
             workflow_id,
@@ -81,10 +82,6 @@ class MouseHandlersMixin:
                 "click_count": click_count,
             },
         )
-
-        if saved_pos is not None:
-            time.sleep(0.05)
-            self._input.move_to(saved_pos[0], saved_pos[1])
 
     def _handle_mouse_scroll(
         self,

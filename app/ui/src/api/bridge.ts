@@ -4,8 +4,11 @@ interface PywebviewApi {
   bootstrap(): Promise<BootstrapData>;
   list_logs(): Promise<LogEntry[]>;
   get_runtime_snapshot(): Promise<RuntimeSnapshot>;
+  get_async_vision_snapshot(): Promise<AsyncVisionSnapshotData>;
   save_binding(workflow_id: string, hotkey: string, enabled: boolean, settings?: Record<string, unknown>): Promise<SaveResult>;
   save_custom_flow(payload: Record<string, unknown>): Promise<SaveResult>;
+  begin_key_capture(): Promise<{ ok: boolean; error?: string }>;
+  end_key_capture(): Promise<{ ok: boolean; error?: string }>;
   upload_template_image(payload: { filename: string; data_url: string }): Promise<UploadResult>;
   pick_template_image(): Promise<PickResult>;
   save_async_monitor(payload: Record<string, unknown>): Promise<SaveMonitorResult>;
@@ -25,6 +28,8 @@ export interface BootstrapData {
   app: AppInfo;
   architecture: ArchitectureItem[];
   shared_variables: Record<string, unknown>;
+  runtime?: RuntimeSnapshot;
+  logs?: LogEntry[];
 }
 
 export interface SummaryData {
@@ -56,6 +61,11 @@ export interface RuntimeSnapshot {
   key_events: KeyEvent[];
 }
 
+export interface AsyncVisionSnapshotData {
+  monitors: Record<string, unknown>[];
+  shared_variables: Record<string, unknown>;
+}
+
 export interface WorkflowRuntimeState {
   status: string;
   status_label: string;
@@ -67,6 +77,11 @@ export interface WorkflowRuntimeState {
   iteration_count: number;
   last_trigger_time: string;
   last_finish_time: string;
+  current_step_index?: number;
+  current_step_kind?: string;
+  current_node_id?: string;
+  last_click_message?: string;
+  last_click_time?: string;
 }
 
 export interface KeyEvent {
@@ -150,10 +165,15 @@ export const api = {
   bootstrap: () => ensureApi().bootstrap(),
   listLogs: () => ensureApi().list_logs(),
   getRuntimeSnapshot: () => ensureApi().get_runtime_snapshot(),
+  getAsyncVisionSnapshot: () => ensureApi().get_async_vision_snapshot(),
   saveBinding: (workflowId: string, hotkey: string, enabled: boolean, settings?: Record<string, unknown>) =>
     ensureApi().save_binding(workflowId, hotkey, enabled, settings),
   saveCustomFlow: (payload: Record<string, unknown>) =>
     ensureApi().save_custom_flow(payload),
+  beginKeyCapture: () =>
+    ensureApi().begin_key_capture(),
+  endKeyCapture: () =>
+    ensureApi().end_key_capture(),
   uploadTemplateImage: (payload: { filename: string; data_url: string }) =>
     ensureApi().upload_template_image(payload),
   pickTemplateImage: () =>

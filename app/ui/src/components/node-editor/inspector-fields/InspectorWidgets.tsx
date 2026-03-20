@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import type { FocusEventHandler, ReactNode } from 'react';
 
 export function InspectorInput({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
@@ -13,7 +14,17 @@ export function InspectorInput({ label, value, onChange }: { label: string; valu
  * Key capture input — listens for actual keydown events and records the key name
  * (e.g. "a", "enter", "ctrl+shift+a") instead of text input.
  */
-export function InspectorKeyInput({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+interface InspectorKeyInputProps {
+  label?: string;
+  value: string;
+  onChange: (v: string) => void;
+  onFocus?: FocusEventHandler<HTMLInputElement>;
+  onBlur?: FocusEventHandler<HTMLInputElement>;
+  className?: string;
+  wrapperClassName?: string;
+}
+
+export function InspectorKeyInput({ label, value, onChange, onFocus, onBlur, className, wrapperClassName }: InspectorKeyInputProps) {
   const [listening, setListening] = useState(false);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -21,8 +32,8 @@ export function InspectorKeyInput({ label, value, onChange }: { label: string; v
     e.stopPropagation();
 
     const key = e.key;
-    // Ignore standalone modifier keys
-    if (['Control', 'Shift', 'Alt', 'Meta'].includes(key)) return;
+    // Ignore standalone modifier keys and unexpected synthetic/system keys.
+    if (['Control', 'Shift', 'Alt', 'Meta', 'Insert'].includes(key)) return;
 
     const parts: string[] = [];
     if (e.ctrlKey) parts.push('ctrl');
@@ -33,19 +44,35 @@ export function InspectorKeyInput({ label, value, onChange }: { label: string; v
     onChange(parts.join('+'));
   }, [onChange]);
 
+  const handleFocus: FocusEventHandler<HTMLInputElement> = (e) => {
+    setListening(true);
+    onFocus?.(e);
+  };
+
+  const handleBlur: FocusEventHandler<HTMLInputElement> = (e) => {
+    setListening(false);
+    onBlur?.(e);
+  };
+
+  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLInputElement>) => {
+    if (!listening) return;
+    e.preventDefault();
+  }, [listening]);
+
   return (
-    <div className="inspector-field">
-      <label className="inspector-label">{label}</label>
+    <div className={wrapperClassName ?? 'inspector-field'}>
+      {label ? <label className="inspector-label">{label}</label> : null}
       <input
-        className="field-input"
+        className={className ?? 'field-input'}
         type="text"
-        value={listening ? '按下按键...' : value}
+        value={value}
         readOnly
-        onFocus={() => setListening(true)}
-        onBlur={() => setListening(false)}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+        onMouseDown={handleMouseDown}
         onKeyDown={handleKeyDown}
         style={listening ? { borderColor: 'var(--accent)', background: 'rgba(96,165,250,0.08)' } : undefined}
-        placeholder="点击后按下按键"
+        placeholder={listening ? '按下按键...' : '点击后按下按键'}
       />
     </div>
   );
@@ -67,6 +94,23 @@ export function InspectorSelect({ label, value, options, onChange }: { label: st
       <select className="field-input" value={value} onChange={(e) => onChange(e.target.value)}>
         {options.map(([val, lbl]) => <option key={val} value={val}>{lbl}</option>)}
       </select>
+    </div>
+  );
+}
+
+export function InspectorCheckbox({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="inspector-field" style={{ gap: 8, cursor: 'pointer' }}>
+      <span className="inspector-label">{label}</span>
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+    </label>
+  );
+}
+
+export function InspectorHint({ children }: { children: ReactNode }) {
+  return (
+    <div className="inspector-field" style={{ marginTop: -4 }}>
+      <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>{children}</div>
     </div>
   );
 }

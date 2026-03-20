@@ -1,4 +1,5 @@
 import { stepTypeLabel, STEP_TYPE_GROUPS } from '../../models/step';
+import type { Step } from '../../models/step';
 import type { StepNodeData } from './graph-utils';
 import { getKindColor } from './graph-utils';
 import InspectorFieldFactory from './inspector-fields/InspectorFieldFactory';
@@ -6,12 +7,13 @@ import InspectorFieldFactory from './inspector-fields/InspectorFieldFactory';
 interface NodeInspectorProps {
   nodeId: string;
   data: StepNodeData;
+  workflowSteps: Step[];
   onClose: () => void;
   onUpdateField: (nodeId: string, field: string, value: unknown) => void;
   onChangeKind: (nodeId: string, newKind: string) => void;
 }
 
-export default function NodeInspector({ nodeId, data, onClose, onUpdateField, onChangeKind }: NodeInspectorProps) {
+export default function NodeInspector({ nodeId, data, workflowSteps, onClose, onUpdateField, onChangeKind }: NodeInspectorProps) {
   const { step } = data;
   const color = getKindColor(step.kind);
   const update = (field: string, value: unknown) => onUpdateField(nodeId, field, value);
@@ -46,7 +48,7 @@ export default function NodeInspector({ nodeId, data, onClose, onUpdateField, on
         </div>
 
         {/* Dynamic fields based on step kind */}
-        <InspectorFieldFactory step={step} update={update} />
+        <InspectorFieldFactory step={step} workflowSteps={workflowSteps} update={update} />
       </div>
     </aside>
   );

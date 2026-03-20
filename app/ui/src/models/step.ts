@@ -90,7 +90,6 @@ export const VISUAL_DETECT_KINDS: Set<StepKind> = new Set([
   'check_region_color',
   'detect_color_region',
   'match_fingerprint',
-  'async_detect',
 ]);
 
 export function stepHasBranch(step: Step): boolean {
@@ -122,19 +121,19 @@ export function createDefaultStep(kind: StepKind = 'key_tap'): Step {
     case 'click_point':
       return { kind: 'click_point', source: 'var', var_name: 'target', x: 0, y: 0, offset_x: 0, offset_y: 0, button: 'left', return_cursor: true, settle_ms: 60, click_count: 1, modifiers: [], modifier_delay_ms: 50 };
     case 'if_var_found':
-      return { kind: 'if_var_found', var_name: 'target', variable_scope: 'local', then_steps: [createDefaultStep('key_tap')], else_steps: [] };
+      return { kind: 'if_var_found', var_name: 'target', variable_scope: 'local' };
     case 'set_variable_state':
       return { kind: 'set_variable_state', var_name: 'target', variable_scope: 'local', state: 'missing' };
     case 'key_hold':
-      return { kind: 'key_hold', key: '', duration_ms: 0, steps: [createDefaultStep('delay')] };
+      return { kind: 'key_hold', key: '', duration_ms: 0 };
     case 'mouse_scroll':
       return { kind: 'mouse_scroll', direction: 'down', clicks: 3 };
     case 'mouse_hold':
       return { kind: 'mouse_hold', source: 'absolute', button: 'left', duration_ms: 500, var_name: 'target', x: 0, y: 0, offset_x: 0, offset_y: 0 };
     case 'detect_color':
-      return { kind: 'detect_color', source: 'absolute', x: 0, y: 0, var_name: 'target', offset_x: 0, offset_y: 0, expected_color: '', tolerance: 20, save_as: 'color_result', then_steps: [], else_steps: [] };
+      return { kind: 'detect_color', source: 'absolute', x: 0, y: 0, var_name: 'target', offset_x: 0, offset_y: 0, expected_color: '', tolerance: 20, save_as: 'color_result' };
     case 'loop':
-      return { kind: 'loop', loop_type: 'count', max_iterations: 10, var_name: 'target', variable_scope: 'local', steps: [createDefaultStep('delay')] };
+      return { kind: 'loop', loop_type: 'count', max_iterations: 10, var_name: 'target', variable_scope: 'local' };
     case 'call_workflow':
       return { kind: 'call_workflow', target_workflow_id: '' };
     case 'log':
@@ -146,17 +145,17 @@ export function createDefaultStep(kind: StepKind = 'key_tap'): Step {
     case 'mouse_drag':
       return { kind: 'mouse_drag', source: 'absolute', start_x: 0, start_y: 0, end_x: 0, end_y: 0, var_name: 'target', start_offset_x: 0, start_offset_y: 0, end_offset_x: 0, end_offset_y: 0, button: 'left', duration_ms: 300, steps: 20 };
     case 'if_condition':
-      return { kind: 'if_condition', var_name: 'target', variable_scope: 'local', field: 'found', operator: '==', value: 'true', then_steps: [createDefaultStep('key_tap')], else_steps: [] };
+      return { kind: 'if_condition', var_name: 'target', variable_scope: 'local', field: 'found', operator: '==', value: 'true' };
     case 'set_variable':
       return { kind: 'set_variable', var_name: 'target', field: 'found', value: '' };
     case 'check_pixels':
-      return { kind: 'check_pixels', points: [{ x: 0, y: 0, expected_color: '', tolerance: 20 }], logic: 'all', save_as: 'pixel_result', then_steps: [], else_steps: [] };
+      return { kind: 'check_pixels', points: [{ x: 0, y: 0, expected_color: '', tolerance: 20 }], logic: 'all', save_as: 'pixel_result' };
     case 'check_region_color':
-      return { kind: 'check_region_color', left: 0, top: 0, width: 100, height: 100, expected_color: '', tolerance: 20, min_ratio: 0.5, save_as: 'region_color_result', then_steps: [], else_steps: [] };
+      return { kind: 'check_region_color', left: 0, top: 0, width: 100, height: 100, expected_color: '', tolerance: 20, min_ratio: 0.5, save_as: 'region_color_result' };
     case 'detect_color_region':
-      return { kind: 'detect_color_region', h_min: 0, h_max: 179, s_min: 50, s_max: 255, v_min: 50, v_max: 255, region_left: 0, region_top: 0, region_width: 0, region_height: 0, min_area: 100, save_as: 'color_region_result', then_steps: [], else_steps: [] };
+      return { kind: 'detect_color_region', h_min: 0, h_max: 179, s_min: 50, s_max: 255, v_min: 50, v_max: 255, region_left: 0, region_top: 0, region_width: 0, region_height: 0, min_area: 100, save_as: 'color_region_result' };
     case 'match_fingerprint':
-      return { kind: 'match_fingerprint', anchor_x: 0, anchor_y: 0, sample_points: [], tolerance: 20, save_as: 'fingerprint_result', then_steps: [], else_steps: [] };
+      return { kind: 'match_fingerprint', anchor_x: 0, anchor_y: 0, sample_points: [], tolerance: 20, save_as: 'fingerprint_result' };
     case 'async_detect':
       return { kind: 'async_detect', template_path: '', confidence: 0.88, timeout_ms: 5000, save_as: 'async_target', scan_rate: 'normal', custom_interval_ms: 350, match_mode: 'normal', search_scope: 'full_screen', search_region: null, not_found_action: 'mark_missing' };
     default:
@@ -167,20 +166,7 @@ export function createDefaultStep(kind: StepKind = 'key_tap'): Step {
 export function normalizeStep(raw: Record<string, unknown>): Step {
   const kind = (typeof raw.kind === 'string' ? raw.kind : 'key_tap') as StepKind;
   const defaults = createDefaultStep(kind);
-  const step: Step = { ...defaults, ...raw, kind };
-
-  // Recursively normalize nested steps
-  if (Array.isArray(step.then_steps)) {
-    step.then_steps = normalizeSteps(step.then_steps as Record<string, unknown>[]);
-  }
-  if (Array.isArray(step.else_steps)) {
-    step.else_steps = normalizeSteps(step.else_steps as Record<string, unknown>[]);
-  }
-  if (Array.isArray(step.steps)) {
-    step.steps = normalizeSteps(step.steps as Record<string, unknown>[]);
-  }
-
-  return step;
+  return { ...defaults, ...raw, kind };
 }
 
 export function normalizeSteps(rawSteps: Record<string, unknown>[]): Step[] {

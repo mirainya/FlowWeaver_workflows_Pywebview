@@ -93,8 +93,7 @@ class VisionHandlersMixin:
         context: dict[str, Any],
         stop_event: Event | None = None,
     ) -> None:
-        found = self._do_detect_image(workflow_id, params, workflow_settings, context, stop_event)
-        self._execute_visual_branch(workflow_id, params, found, workflow_settings, context, stop_event)
+        self._do_detect_image(workflow_id, params, workflow_settings, context, stop_event)
 
     def _handle_detect_click_return(
         self,
@@ -210,8 +209,7 @@ class VisionHandlersMixin:
         context: dict[str, Any],
         stop_event: Event | None = None,
     ) -> None:
-        matched = self._do_detect_color(workflow_id, params, workflow_settings, context, stop_event)
-        self._execute_visual_branch(workflow_id, params, matched, workflow_settings, context, stop_event)
+        self._do_detect_color(workflow_id, params, workflow_settings, context, stop_event)
 
     def _do_detect_color_region(
         self,
@@ -260,8 +258,7 @@ class VisionHandlersMixin:
         context: dict[str, Any],
         stop_event: Event | None = None,
     ) -> None:
-        found = self._do_detect_color_region(workflow_id, params, workflow_settings, context, stop_event)
-        self._execute_visual_branch(workflow_id, params, found, workflow_settings, context, stop_event)
+        self._do_detect_color_region(workflow_id, params, workflow_settings, context, stop_event)
 
     def _do_async_detect(
         self,
@@ -406,5 +403,4 @@ class VisionHandlersMixin:
         context: dict[str, Any],
         stop_event: Event | None = None,
     ) -> None:
-        found = self._do_async_detect(workflow_id, params, workflow_settings, context, stop_event)
-        self._execute_visual_branch(workflow_id, params, found, workflow_settings, context, stop_event)
+        self._do_async_detect(workflow_id, params, workflow_settings, context, stop_event)

@@ -39,14 +39,9 @@ class VariableHandlersMixin:
         self,
         workflow_id: str,
         params: dict[str, Any],
-        workflow_settings: dict[str, Any],
         context: dict[str, Any],
-        stop_event: Event | None,
     ) -> None:
-        found = self._evaluate_if_var_found(workflow_id, params, context)
-        branch_key = "then_steps" if found else "else_steps"
-        branch_steps = [self._coerce_action(item) for item in list(params.get(branch_key, []))]
-        self._execute_steps(workflow_id, branch_steps, workflow_settings, context, stop_event)
+        self._evaluate_if_var_found(workflow_id, params, context)
 
     def _evaluate_condition(self, variable_scope: str, var_name: str, field: str, operator: str, value: str, context: dict[str, Any]) -> bool:
         var_data = self._resolve_variable(variable_scope, var_name, context) or {}
@@ -111,14 +106,9 @@ class VariableHandlersMixin:
         self,
         workflow_id: str,
         params: dict[str, Any],
-        workflow_settings: dict[str, Any],
         context: dict[str, Any],
-        stop_event: Event | None,
     ) -> None:
-        result = self._evaluate_if_condition_result(workflow_id, params, context)
-        branch_key = "then_steps" if result else "else_steps"
-        branch_steps = [self._coerce_action(item) for item in list(params.get(branch_key, []))]
-        self._execute_steps(workflow_id, branch_steps, workflow_settings, context, stop_event)
+        self._evaluate_if_condition_result(workflow_id, params, context)
 
     def _handle_set_variable_state(
         self,

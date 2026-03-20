@@ -1,6 +1,7 @@
 import { useDesignerStore, type SaveStatus } from '../../stores/designer';
-import { useState, lazy, Suspense } from 'react';
-import StepList from './step-list/StepList';
+import { lazy, Suspense, useCallback, useEffect, useRef } from 'react';
+import { api } from '../../api/bridge';
+import { InspectorKeyInput } from '../node-editor/inspector-fields/InspectorWidgets';
 
 const NodeEditorPanel = lazy(() => import('../node-editor/NodeEditorPanel'));
 
@@ -16,11 +17,41 @@ export default function DesignerPanel() {
   const {
     designer, saveState, isOpen,
     closeDesigner, updateField, updateRunMode, updateRunCount,
-    saveFlow, resetDesigner, addStep, removeStep, moveStep,
-    updateStepField, changeStepKind, undo, redo, canUndo, canRedo,
+    saveFlow, resetDesigner, undo, redo, canUndo, canRedo,
   } = useDesignerStore();
+  const hotkeyCaptureActiveRef = useRef(false);
 
-  const [viewMode, setViewMode] = useState<'list' | 'node'>('node');
+  const endHotkeyCapture = useCallback(async () => {
+    if (!hotkeyCaptureActiveRef.current) return;
+    hotkeyCaptureActiveRef.current = false;
+    try {
+      await api.endKeyCapture();
+    } catch {
+      // noop
+    }
+  }, []);
+
+  const beginHotkeyCapture = useCallback(async () => {
+    if (hotkeyCaptureActiveRef.current) return;
+    hotkeyCaptureActiveRef.current = true;
+    try {
+      await api.beginKeyCapture();
+    } catch {
+      hotkeyCaptureActiveRef.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) {
+      void endHotkeyCapture();
+    }
+  }, [endHotkeyCapture, isOpen]);
+
+  useEffect(() => {
+    return () => {
+      void endHotkeyCapture();
+    };
+  }, [endHotkeyCapture]);
 
   if (!isOpen) return null;
 
@@ -32,7 +63,7 @@ export default function DesignerPanel() {
       <div className="designer-head">
         <div className="designer-title-group">
           <h4>{isNew ? '新建流程' : '编辑流程'}</h4>
-          <p className="subtle">配置热键、运行模式和步骤。</p>
+          <p className="subtle">配置热键、运行模式和节点图。</p>
         </div>
         <div className="designer-head-side">
           <div className="designer-status">
@@ -40,10 +71,6 @@ export default function DesignerPanel() {
             <span className="status-text">{saveState.message || statusInfo.text}</span>
           </div>
           <div className="designer-head-actions">
-            <div className="view-toggle">
-              <button className={`ghost-button${viewMode === 'list' ? ' active' : ''}`} type="button" onClick={() => setViewMode('list')}>列表</button>
-              <button className={`ghost-button${viewMode === 'node' ? ' active' : ''}`} type="button" onClick={() => setViewMode('node')}>节点图</button>
-            </div>
             <button className="ghost-button" type="button" onClick={undo} disabled={!canUndo()}>撤销</button>
             <button className="ghost-button" type="button" onClick={redo} disabled={!canRedo()}>前进</button>
             <button className="ghost-button" type="button" onClick={resetDesigner}>重置</button>
@@ -66,16 +93,19 @@ export default function DesignerPanel() {
               placeholder="流程名称"
             />
           </div>
-          <div className="field-inline">
-            <label className="field-inline-label">热键</label>
-            <input
-              className="field-input field-input-short"
-              type="text"
-              value={designer.hotkey}
-              onChange={(e) => updateField('hotkey', e.target.value)}
-              placeholder="如 F6"
-            />
-          </div>
+          <InspectorKeyInput
+            label="热键"
+            wrapperClassName="field-inline"
+            className="field-input field-input-short"
+            value={designer.hotkey}
+            onChange={(value) => updateField('hotkey', value)}
+            onFocus={() => {
+              void beginHotkeyCapture();
+            }}
+            onBlur={() => {
+              void endHotkeyCapture();
+            }}
+          />
           <div className="field-inline">
             <label className="field-inline-label">说明</label>
             <input
@@ -120,33 +150,9 @@ export default function DesignerPanel() {
           )}
         </div>
 
-        {/* Steps - List view */}
-        {viewMode === 'list' && (
-          <div className="designer-steps-section">
-            <div className="designer-steps-head">
-              <h5>步骤列表</h5>
-              <button className="ghost-button" type="button" onClick={() => addStep('steps')}>
-                + 添加步骤
-              </button>
-            </div>
-            <StepList
-              steps={designer.steps}
-              path="steps"
-              removeStep={removeStep}
-              moveStep={moveStep}
-              updateStepField={updateStepField}
-              changeStepKind={changeStepKind}
-              addStep={addStep}
-            />
-          </div>
-        )}
-
-        {/* Steps - Node editor view */}
-        {viewMode === 'node' && (
-          <Suspense fallback={<div className="empty-state">加载节点编辑器…</div>}>
-            <NodeEditorPanel />
-          </Suspense>
-        )}
+        <Suspense fallback={<div className="empty-state">加载节点编辑器…</div>}>
+          <NodeEditorPanel />
+        </Suspense>
       </div>
     </section>
   );

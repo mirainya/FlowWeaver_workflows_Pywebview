@@ -23,11 +23,13 @@ from app.core.workflows import (
     default_custom_flow_payload,
     extract_shared_variable_names,
     get_tab_definitions,
-    iter_action_payloads,
+    iter_node_payloads,
     serialize_custom_flow_workflow,
+    workflow_has_visual_nodes,
 )
 from app.models import WorkflowBinding, WorkflowDefinition
 from app.services.async_vision import AsyncVisionManager, sanitize_async_monitor_record
+from app.services.async_sanitize import _effective_confidence
 from app.services.template_manager import TemplateManager
 from app.services.input_controller import WindowsInputController
 from app.services.vision import SharedScreenCapture, TemplateMatcher
@@ -165,6 +167,11 @@ class AssistantApplication:
             "last_key_time": "--",
             "key_event_count": 0,
             "iteration_count": 0,
+            "current_step_index": -1,
+            "current_step_kind": "",
+            "current_node_id": "",
+            "last_click_message": "",
+            "last_click_time": "--",
         }
 
     def _rebuild_workflow_catalog(self) -> None:
@@ -190,7 +197,7 @@ class AssistantApplication:
         self.bindings = {
             workflow.workflow_id: self.bindings.get(
                 workflow.workflow_id,
-                WorkflowBinding(hotkey=workflow.default_hotkey, enabled=True),
+                WorkflowBinding(hotkey=workflow.hotkey, enabled=True),
             )
             for workflow in self.workflows
         }
@@ -250,8 +257,32 @@ class AssistantApplication:
     def capture_screen_for_crop(self) -> dict[str, str]:
         return self.template_manager.capture_screen_for_crop()
 
-    def test_template_match(self, template_path: str, confidence: float = 0.88) -> dict:
-        return self.template_manager.test_template_match(template_path, confidence)
+    def test_template_match(self, payload: dict[str, Any]) -> dict[str, Any]:
+        record = sanitize_async_monitor_record(payload)
+        if record is None:
+            raise ValueError("测试配置无效。")
+        template_path = str(record.get("template_path", "")).strip()
+        if not template_path:
+            raise ValueError("请先选择模板图片。")
+        resolved = Path(template_path)
+        if not resolved.is_absolute():
+            resolved = self.project_root / resolved
+        if not resolved.exists():
+            raise ValueError(f"模板图片不存在：{resolved.name}")
+        search_region = None
+        if str(record.get("search_scope", "full_screen")) == "fixed_region":
+            region = dict(record.get("fixed_region") or {})
+            if int(region.get("width", 0)) > 0 and int(region.get("height", 0)) > 0:
+                search_region = region
+        result = self.vision.test_template_match(
+            template_path=resolved,
+            confidence=_effective_confidence(record),
+            search_region=search_region,
+        )
+        result["effective_confidence"] = _effective_confidence(record)
+        result["active_scope"] = "fixed_region" if search_region is not None else "full_screen"
+        result["search_region"] = search_region
+        return result
 
     def crop_and_save_template(
         self, data_url: str, left: int, top: int, width: int, height: int, filename: str = ""
@@ -314,21 +345,11 @@ class AssistantApplication:
 
         record = sanitize_async_monitor_record(
             {
+                **payload,
                 "monitor_id": monitor_id,
                 "name": name,
                 "output_variable": output_variable,
                 "template_path": template_path,
-                "enabled": payload.get("enabled", True),
-                "preset": payload.get("preset", "fixed_button"),
-                "search_scope": payload.get("search_scope", "full_screen"),
-                "fixed_region": payload.get("fixed_region", {}),
-                "scan_rate": payload.get("scan_rate", "normal"),
-                "not_found_action": payload.get("not_found_action", "keep_last"),
-                "match_mode": payload.get("match_mode", "normal"),
-                "custom_confidence": payload.get("custom_confidence", 0.88),
-                "follow_radius": payload.get("follow_radius", 220),
-                "recover_after_misses": payload.get("recover_after_misses", 2),
-                "stale_after_ms": payload.get("stale_after_ms", 1200),
             }
         )
         if record is None:
@@ -521,9 +542,14 @@ class AssistantApplication:
         if event_type == "click":
             x = event.get("x")
             y = event.get("y")
+            button = str(event.get("button", "left"))
+            source = str(event.get("source", "var"))
+            click_message = f"已点击坐标：({x}, {y}) · {button} · 来源 {source}"
             self._update_runtime_state(
                 workflow_id,
-                last_message=f"已点击坐标：({x}, {y})",
+                last_message=click_message,
+                last_click_message=click_message,
+                last_click_time=now,
             )
             return
 
@@ -532,14 +558,109 @@ class AssistantApplication:
                 workflow_id,
                 current_step_index=int(event.get("step_index", -1)),
                 current_step_kind=str(event.get("step_kind", "")),
+                current_node_id=str(event.get("node_id", "")),
             )
             return
 
         if event_type == "step_exit":
+            # 不在 step_exit 立即清空当前节点；前端是轮询拉取运行态，
+            # 如果节点执行很快，立刻清空会导致绿色高亮经常抓不到。
+            # 当前节点改由下一次 step_enter 或 end/error 时覆盖/清空。
+            return
+
+        if event_type == "start":
             self._update_runtime_state(
                 workflow_id,
+                status="running",
+                active=True,
+                last_message=str(event.get("message", "开始执行")),
+                last_trigger_time=now,
+                last_click_message="",
+                last_click_time="--",
+            )
+            return
+
+        if event_type == "end":
+            current_state = self.runtime_states.get(workflow_id, {})
+            end_message = str(event.get("message", "流程结束"))
+            last_click_message = str(current_state.get("last_click_message", "")).strip()
+            if last_click_message:
+                end_message = f"{end_message} · 最近点击：{last_click_message}"
+            self._update_runtime_state(
+                workflow_id,
+                status="idle",
+                active=False,
+                last_message=end_message,
+                last_finish_time=now,
                 current_step_index=-1,
                 current_step_kind="",
+                current_node_id="",
+            )
+            return
+
+        if event_type == "error":
+            self._update_runtime_state(
+                workflow_id,
+                status="error",
+                active=False,
+                last_message=str(event.get("message", "执行出错")),
+                last_finish_time=now,
+            )
+            return
+
+        if event_type == "stopping":
+            self._update_runtime_state(
+                workflow_id,
+                status="stopping",
+                last_message=str(event.get("message", "正在停止…")),
+            )
+            return
+
+        if event_type == "loop_start":
+            self._update_runtime_state(
+                workflow_id,
+                status="looping",
+                active=True,
+                last_message=str(event.get("message", "循环已启动")),
+                last_trigger_time=now,
+            )
+            return
+
+        if event_type == "loop_stop":
+            self._update_runtime_state(
+                workflow_id,
+                status="stopping",
+                active=True,
+                last_message=str(event.get("message", "循环已停止")),
+            )
+            return
+
+        if event_type == "toggle_throttled":
+            self._update_runtime_state(
+                workflow_id,
+                last_message=str(event.get("message", "切换过快，已忽略本次触发。")),
+            )
+            return
+
+        if event_type in ("loop_iteration", "run_count"):
+            iteration = int(event.get("iteration", event.get("current", 0)))
+            total = event.get("total") or event.get("max")
+            msg = f"第 {iteration} 轮"
+            if total:
+                msg = f"第 {iteration}/{total} 轮"
+            self._update_runtime_state(
+                workflow_id,
+                iteration_count=iteration,
+                last_message=msg,
+            )
+            return
+
+        if event_type == "log":
+            message = str(event.get("message", ""))
+            level = str(event.get("level", "info"))
+            self._update_runtime_state(
+                workflow_id,
+                last_message=f"[日志] {message}" if message else "日志输出",
             )
             return
 
@@ -588,6 +709,16 @@ class AssistantApplication:
             return
 
         trigger_key = binding.hotkey if trigger_source == "hotkey" else "面板按钮"
+        run_mode = workflow.normalize_run_mode()
+        has_graph = bool(
+            workflow.node_graph
+            and isinstance(workflow.node_graph.get("nodes"), list)
+            and len(workflow.node_graph.get("nodes", [])) > 0
+        )
+        self.add_log(
+            f"触发流程：{workflow.name} | 来源={trigger_source} | 热键={trigger_key or '--'} | run_mode={run_mode.get('type', 'once')} | graph={'yes' if has_graph else 'no'}",
+            "info",
+        )
         self.handle_runtime_event(
             workflow_id,
             {
@@ -630,8 +761,7 @@ class AssistantApplication:
         description = str(payload.get("description", "")).strip() or "用户创建的流程。"
         enabled = bool(payload.get("enabled", True))
         run_mode = payload.get("run_mode", default_custom_flow_payload()["run_mode"])
-        steps = payload.get("steps", default_custom_flow_payload()["steps"])
-        node_graph = payload.get("node_graph", None)
+        node_graph = payload.get("node_graph", default_custom_flow_payload()["node_graph"])
 
         if not name:
             raise ValueError("流程名字不能为空。")
@@ -662,7 +792,6 @@ class AssistantApplication:
             "hotkey": hotkey,
             "enabled": enabled,
             "run_mode": run_mode,
-            "steps": steps,
             "node_graph": node_graph,
         }
         workflow = build_custom_flow_workflows([record])[0]
@@ -700,17 +829,59 @@ class AssistantApplication:
 
     def save_loop_macro(self, payload: dict[str, Any]) -> dict[str, Any]:
         sequence = payload.get("sequence", [])
-        steps: list[dict[str, Any]] = []
-        for step in list(sequence):
+        nodes = [
+            {"id": "__start__", "kind": "__start__", "position": {"x": 80, "y": 60}, "params": {}},
+        ]
+        edges: list[dict[str, Any]] = []
+        previous_node_id = "__start__"
+        previous_handle = "bottom"
+
+        for index, step in enumerate(list(sequence)):
             if not isinstance(step, dict):
                 continue
-            steps.append(
+            node_id = f"loop-macro-node-{index + 1}"
+            nodes.append(
                 {
+                    "id": node_id,
                     "kind": "key_tap",
-                    "keys": str(step.get("keys", "")).strip(),
-                    "delay_ms_after": int(step.get("delay_ms", 100)),
+                    "position": {"x": 80, "y": 180 + index * 160},
+                    "params": {
+                        "keys": str(step.get("keys", "")).strip(),
+                        "delay_ms_after": int(step.get("delay_ms", 100)),
+                    },
                 }
             )
+            edges.append(
+                {
+                    "id": f"edge-{previous_node_id}-{node_id}",
+                    "source": previous_node_id,
+                    "sourceHandle": previous_handle,
+                    "target": node_id,
+                    "targetHandle": "top",
+                }
+            )
+            previous_node_id = node_id
+            previous_handle = "bottom"
+
+        end_node_id = "__end__loop_macro"
+        nodes.append(
+            {
+                "id": end_node_id,
+                "kind": "__end__",
+                "position": {"x": 80, "y": 180 + len(nodes) * 160},
+                "params": {},
+            }
+        )
+        edges.append(
+            {
+                "id": f"edge-{previous_node_id}-{end_node_id}",
+                "source": previous_node_id,
+                "sourceHandle": previous_handle,
+                "target": end_node_id,
+                "targetHandle": "top",
+            }
+        )
+
         return self.save_custom_flow(
             {
                 "workflow_id": payload.get("workflow_id", ""),
@@ -719,7 +890,7 @@ class AssistantApplication:
                 "description": payload.get("description", "兼容旧版循环宏入口创建的流程。"),
                 "enabled": payload.get("enabled", True),
                 "run_mode": {"type": "toggle_loop"},
-                "steps": steps,
+                "node_graph": {"nodes": nodes, "edges": edges},
             }
         )
 
@@ -758,7 +929,7 @@ class AssistantApplication:
 
     def inspect_workflow(self, workflow: WorkflowDefinition) -> list[str]:
         issues: list[str] = []
-        for payload in iter_action_payloads(workflow.actions):
+        for payload in iter_node_payloads(workflow.node_graph):
             if payload.get("kind") not in {"detect_image", "detect_click_return"}:
                 continue
             template_path = Path(str(payload.get("template_path", "")))
@@ -795,7 +966,7 @@ class AssistantApplication:
         visual_count = sum(
             1
             for workflow in self.workflows
-                if any(payload.get("kind") == "detect_image" for payload in iter_action_payloads(workflow.actions))
+            if workflow_has_visual_nodes(workflow.node_graph)
         ) + len(self.async_monitor_records)
         loop_count = sum(1 for workflow in self.workflows if workflow.is_toggle_loop())
         custom_flow_count = len(self.custom_workflows)
@@ -809,6 +980,7 @@ class AssistantApplication:
         }
 
     def bootstrap(self) -> dict[str, Any]:
+        async_snapshot = self.get_async_vision_snapshot()
         return {
             "app": {
                 "name": "织流 FlowWeaver",
@@ -821,11 +993,13 @@ class AssistantApplication:
             "runtime": self.get_runtime_snapshot(),
             "workflows": self.get_workflow_payloads(),
             "logs": self.get_logs(),
-            "async_vision": self.get_async_vision_snapshot(),
+            "async_monitors": async_snapshot.get("monitors", []),
+            "shared_variables": async_snapshot.get("shared_variables", []),
+            "async_vision": async_snapshot,
             "architecture": [
                 {
                     "title": "统一流程模型",
-                    "description": "流程统一为 run_mode + steps，支持一次、次数循环和开关循环。",
+                    "description": "流程统一为 run_mode + node_graph，控制流完全由节点与连线决定。",
                 },
                 {
                     "title": "识图上下文变量",
@@ -833,7 +1007,7 @@ class AssistantApplication:
                 },
                 {
                     "title": "流程编排页",
-                    "description": "全部同步流程统一汇总到流程编排页，内置示例与自定义流程共用同一套步骤模型。",
+                    "description": "全部同步流程统一汇总到流程编排页，内置示例与自定义流程共用同一套节点图模型。",
                 },
             ],
         }
@@ -843,7 +1017,7 @@ class AssistantApplication:
         for workflow in self.workflows:
             binding = self.bindings.get(workflow.workflow_id)
             if binding is not None and binding.enabled:
-                needed |= extract_shared_variable_names(workflow.actions)
+                needed |= extract_shared_variable_names(workflow.node_graph)
         return needed
 
     def _refresh_async_monitors(self) -> None:

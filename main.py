@@ -5,6 +5,15 @@ import sys
 from pathlib import Path
 
 
+def _resolve_paths() -> tuple[Path, Path]:
+    if getattr(sys, 'frozen', False):
+        release_root = Path(sys.executable).resolve().parent
+        bundle_root = Path(__file__).resolve().parent
+        return release_root, bundle_root
+    project_root = Path(__file__).resolve().parent
+    return project_root, project_root
+
+
 def _configure_console_encoding() -> None:
     for stream_name in ('stdout', 'stderr'):
         stream = getattr(sys, stream_name, None)
@@ -29,13 +38,13 @@ def main() -> None:
         print(f"缺少依赖：{missing_name}。请先执行 `pip install -r requirements.txt`。")
         sys.exit(1)
 
-    project_root = Path(__file__).resolve().parent
+    project_root, bundle_root = _resolve_paths()
     application = AssistantApplication(project_root)
     atexit.register(application.shutdown)
     desktop_api = DesktopApi(application)
 
-    ui_dist = project_root / 'app' / 'ui' / 'dist' / 'index.html'
-    ui_fallback = project_root / 'app' / 'ui' / 'index.html'
+    ui_dist = bundle_root / 'app' / 'ui' / 'dist' / 'index.html'
+    ui_fallback = bundle_root / 'app' / 'ui' / 'index.html'
     ui_entry = (ui_dist if ui_dist.exists() else ui_fallback).as_uri()
     window = webview.create_window(
         title='织流 FlowWeaver',

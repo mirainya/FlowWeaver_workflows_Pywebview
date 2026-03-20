@@ -113,7 +113,7 @@ class ConfigStore:
         for workflow in builtin_workflows:
             current_binding = binding_payload.get(workflow.workflow_id, {})
             bindings[workflow.workflow_id] = WorkflowBinding(
-                hotkey=str(current_binding.get("hotkey", workflow.default_hotkey)).strip(),
+                hotkey=str(current_binding.get("hotkey", workflow.hotkey)).strip(),
                 enabled=bool(current_binding.get("enabled", True)),
             )
             settings[workflow.workflow_id] = workflow.normalize_settings(
@@ -123,7 +123,7 @@ class ConfigStore:
         for workflow in custom_workflows:
             current_record = custom_lookup.get(workflow.workflow_id, {})
             bindings[workflow.workflow_id] = WorkflowBinding(
-                hotkey=str(current_record.get("hotkey", workflow.default_hotkey)).strip(),
+                hotkey=str(current_record.get("hotkey", workflow.hotkey)).strip(),
                 enabled=bool(current_record.get("enabled", True)),
             )
             settings[workflow.workflow_id] = {}

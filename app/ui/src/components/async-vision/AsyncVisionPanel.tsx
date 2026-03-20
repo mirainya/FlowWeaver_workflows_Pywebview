@@ -1,31 +1,62 @@
 import { useState } from 'react';
 import { useAppStore } from '../../stores/app';
 import { api } from '../../api/bridge';
-import type { AsyncMonitor, MatchType } from '../../models/async-vision';
-import { createEmptyAsyncMonitor, normalizeAsyncMonitor } from '../../models/async-vision';
+import type { AsyncMonitor, MatchType, SearchScope, MatchMode, ScanRate, NotFoundAction } from '../../models/async-vision';
+import { createEmptyAsyncMonitor } from '../../models/async-vision';
 
 /* ── Presets ── */
 
 const PRESETS: { key: string; label: string; desc: string; patch: Partial<AsyncMonitor> }[] = [
-  { key: 'fixed_button', label: '固定按钮', desc: '按钮位置固定，用模板匹配', patch: { match_type: 'template', search_scope: 'fixed_region', scan_rate: 500, follow_radius: 0 } },
-  { key: 'popup_confirm', label: '弹窗确认', desc: '弹窗可能出现在任意位置', patch: { match_type: 'template', search_scope: 'full_screen', scan_rate: 800, follow_radius: 0 } },
-  { key: 'moving_target', label: '移动目标', desc: '目标会移动，需要跟踪', patch: { match_type: 'template', search_scope: 'fixed_region', scan_rate: 300, follow_radius: 80 } },
-  { key: 'status_check', label: '状态检测', desc: '检测像素颜色判断状态', patch: { match_type: 'pixel', search_scope: 'fixed_region', scan_rate: 500 } },
+  { key: 'fixed_button', label: '固定按钮', desc: '按钮位置固定，用模板匹配', patch: { match_type: 'template', search_scope: 'fixed_region', scan_rate: 'normal', follow_radius: 220, not_found_action: 'keep_last', match_mode: 'normal' } },
+  { key: 'dialog_confirm', label: '弹窗确认', desc: '弹窗可能出现在任意位置', patch: { match_type: 'template', search_scope: 'full_screen', scan_rate: 'high', follow_radius: 220, not_found_action: 'mark_missing', match_mode: 'normal' } },
+  { key: 'moving_target', label: '移动目标', desc: '目标会移动，需要跟踪', patch: { match_type: 'template', search_scope: 'follow_last', scan_rate: 'high', follow_radius: 260, not_found_action: 'mark_missing', match_mode: 'loose' } },
+  { key: 'status_check', label: '状态检测', desc: '检测像素颜色判断状态', patch: { match_type: 'check_pixels', search_scope: 'fixed_region', scan_rate: 'low', not_found_action: 'keep_last', match_mode: 'strict' } },
   { key: 'custom', label: '自定义', desc: '完全自定义配置', patch: {} },
 ];
 
 const MATCH_TYPES: [MatchType, string][] = [
   ['template', '模板匹配'],
-  ['pixel', '多点像素'],
-  ['region_color', '区域颜色占比'],
-  ['hsv', 'HSV颜色区域'],
-  ['fingerprint', '特征指纹'],
+  ['check_pixels', '多点像素'],
+  ['check_region_color', '区域颜色占比'],
+  ['detect_color_region', 'HSV颜色区域'],
+  ['match_fingerprint', '特征指纹'],
 ];
 
-export default function AsyncVisionPanel() {
+const SEARCH_SCOPE_OPTIONS: [SearchScope, string][] = [
+  ['full_screen', '全屏'],
+  ['fixed_region', '固定区域'],
+  ['follow_last', '跟随上次'],
+];
+
+const SCAN_RATE_OPTIONS: [ScanRate, string][] = [
+  ['low', '低速'],
+  ['normal', '正常'],
+  ['high', '高速'],
+  ['ultra', '极速'],
+  ['custom', '自定义'],
+];
+
+const MATCH_MODE_OPTIONS: [MatchMode, string][] = [
+  ['loose', '宽松'],
+  ['normal', '正常'],
+  ['strict', '严格'],
+  ['custom', '自定义'],
+];
+
+const NOT_FOUND_OPTIONS: [NotFoundAction, string][] = [
+  ['keep_last', '保留上次'],
+  ['mark_missing', '标记未找到'],
+];
+
+interface AsyncVisionPanelProps {
+  embedded?: boolean;
+}
+
+export default function AsyncVisionPanel({ embedded = false }: AsyncVisionPanelProps) {
   const { asyncMonitors, showToast, loadBootstrap } = useAppStore();
   const [editor, setEditor] = useState<AsyncMonitor | null>(null);
   const [saving, setSaving] = useState(false);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<string | null>(null);
 
   function startNew() {
@@ -87,6 +118,26 @@ export default function AsyncVisionPanel() {
     }
   }
 
+  async function handleToggleEnabled(monitor: AsyncMonitor, enabled: boolean) {
+    setTogglingId(monitor.monitor_id);
+    try {
+      const result = await api.saveAsyncMonitor({ ...monitor, enabled } as unknown as Record<string, unknown>);
+      if (result.ok) {
+        showToast(enabled ? '已启用后台识图' : '已停用后台识图', 'success');
+        await loadBootstrap();
+        if (editor?.monitor_id === monitor.monitor_id) {
+          setEditor({ ...editor, enabled });
+        }
+      } else {
+        showToast(result.error ?? '更新启用状态失败', 'error');
+      }
+    } catch (err) {
+      showToast(`更新失败：${err}`, 'error');
+    } finally {
+      setTogglingId(null);
+    }
+  }
+
   async function handleTestMatch() {
     if (!editor) return;
     setTestResult('测试中…');
@@ -117,7 +168,7 @@ export default function AsyncVisionPanel() {
   }
 
   return (
-    <div>
+    <div className={embedded ? 'async-vision-panel embedded' : 'async-vision-panel'}>
       {/* Editor */}
       {editor && (
         <div className="async-editor glass" style={{ marginBottom: 16 }}>
@@ -164,28 +215,34 @@ export default function AsyncVisionPanel() {
             </div>
             <div className="field-row">
               <label className="field-label">查找范围</label>
-              <select className="field-input" value={editor.search_scope} onChange={(e) => updateField('search_scope', e.target.value as 'full_screen' | 'fixed_region')}>
-                <option value="full_screen">全屏</option>
-                <option value="fixed_region">固定区域</option>
+              <select className="field-input" value={editor.search_scope} onChange={(e) => updateField('search_scope', e.target.value as SearchScope)}>
+                {SEARCH_SCOPE_OPTIONS.map(([val, lbl]) => <option key={val} value={val}>{lbl}</option>)}
               </select>
             </div>
 
             {editor.search_scope === 'fixed_region' && (
               <div className="field-row" style={{ flexWrap: 'wrap', gap: 8 }}>
                 <label className="field-label">固定区域</label>
-                <EditorNumber label="X" value={editor.fixed_region.x} onChange={(v) => updateField('fixed_region', { ...editor.fixed_region, x: v })} />
-                <EditorNumber label="Y" value={editor.fixed_region.y} onChange={(v) => updateField('fixed_region', { ...editor.fixed_region, y: v })} />
-                <EditorNumber label="W" value={editor.fixed_region.w} onChange={(v) => updateField('fixed_region', { ...editor.fixed_region, w: v })} />
-                <EditorNumber label="H" value={editor.fixed_region.h} onChange={(v) => updateField('fixed_region', { ...editor.fixed_region, h: v })} />
+                <EditorNumber label="Left" value={editor.fixed_region.left} onChange={(v) => updateField('fixed_region', { ...editor.fixed_region, left: v })} />
+                <EditorNumber label="Top" value={editor.fixed_region.top} onChange={(v) => updateField('fixed_region', { ...editor.fixed_region, top: v })} />
+                <EditorNumber label="Width" value={editor.fixed_region.width} onChange={(v) => updateField('fixed_region', { ...editor.fixed_region, width: v })} />
+                <EditorNumber label="Height" value={editor.fixed_region.height} onChange={(v) => updateField('fixed_region', { ...editor.fixed_region, height: v })} />
               </div>
             )}
 
-            <EditorNumberRow label="扫描间隔(ms)" value={editor.scan_rate} onChange={(v) => updateField('scan_rate', v)} />
+            <div className="field-row">
+              <label className="field-label">扫描频率</label>
+              <select className="field-input" value={editor.scan_rate} onChange={(e) => updateField('scan_rate', e.target.value as ScanRate)}>
+                {SCAN_RATE_OPTIONS.map(([val, lbl]) => <option key={val} value={val}>{lbl}</option>)}
+              </select>
+            </div>
+            {editor.scan_rate === 'custom' && (
+              <EditorNumberRow label="自定义间隔(ms)" value={editor.custom_interval_ms} onChange={(v) => updateField('custom_interval_ms', v)} />
+            )}
             <div className="field-row">
               <label className="field-label">未找到时</label>
-              <select className="field-input" value={editor.not_found_action} onChange={(e) => updateField('not_found_action', e.target.value as 'clear' | 'keep_last')}>
-                <option value="clear">清除变量</option>
-                <option value="keep_last">保留上次</option>
+              <select className="field-input" value={editor.not_found_action} onChange={(e) => updateField('not_found_action', e.target.value as NotFoundAction)}>
+                {NOT_FOUND_OPTIONS.map(([val, lbl]) => <option key={val} value={val}>{lbl}</option>)}
               </select>
             </div>
             <EditorNumberRow label="跟踪半径" value={editor.follow_radius} onChange={(v) => updateField('follow_radius', v)} />
@@ -204,12 +261,11 @@ export default function AsyncVisionPanel() {
               </div>
               <div className="field-row">
                 <label className="field-label">匹配模式</label>
-                <select className="field-input" value={editor.match_mode} onChange={(e) => updateField('match_mode', e.target.value as 'default' | 'custom_confidence')}>
-                  <option value="default">默认</option>
-                  <option value="custom_confidence">自定义置信度</option>
+                <select className="field-input" value={editor.match_mode} onChange={(e) => updateField('match_mode', e.target.value as MatchMode)}>
+                  {MATCH_MODE_OPTIONS.map(([val, lbl]) => <option key={val} value={val}>{lbl}</option>)}
                 </select>
               </div>
-              {editor.match_mode === 'custom_confidence' && (
+              {editor.match_mode === 'custom' && (
                 <EditorNumberRow label="置信度" value={editor.custom_confidence} onChange={(v) => updateField('custom_confidence', v)} step={0.01} />
               )}
               {testResult && (
@@ -219,7 +275,7 @@ export default function AsyncVisionPanel() {
           )}
 
           {/* Pixel-specific */}
-          {editor.match_type === 'pixel' && (
+          {editor.match_type === 'check_pixels' && (
             <div className="async-editor-section">
               <h5 style={{ margin: '0 0 8px', fontSize: 13 }}>多点像素检测配置</h5>
               <div className="field-row">
@@ -237,17 +293,17 @@ export default function AsyncVisionPanel() {
           )}
 
           {/* Region color */}
-          {editor.match_type === 'region_color' && (
+          {editor.match_type === 'check_region_color' && (
             <div className="async-editor-section">
               <h5 style={{ margin: '0 0 8px', fontSize: 13 }}>区域颜色占比配置</h5>
-              <EditorField label="期望颜色" value={editor.region_color_config.target_color} onChange={(v) => updateField('region_color_config', { ...editor.region_color_config, target_color: v })} placeholder="#FF0000" />
+              <EditorField label="期望颜色" value={editor.region_color_config.target_color} onChange={(v) => updateField('region_color_config', { ...editor.region_color_config, target_color: v, expected_color: v })} placeholder="#FF0000" />
               <EditorNumberRow label="颜色容差" value={editor.region_color_config.tolerance} onChange={(v) => updateField('region_color_config', { ...editor.region_color_config, tolerance: v })} />
               <EditorNumberRow label="最低占比" value={editor.region_color_config.min_ratio} onChange={(v) => updateField('region_color_config', { ...editor.region_color_config, min_ratio: v })} step={0.01} />
             </div>
           )}
 
           {/* HSV */}
-          {editor.match_type === 'hsv' && (
+          {editor.match_type === 'detect_color_region' && (
             <div className="async-editor-section">
               <h5 style={{ margin: '0 0 8px', fontSize: 13 }}>HSV颜色区域配置</h5>
               <EditorNumberRow label="H 最小" value={editor.hsv_config.hsv_lower[0]} onChange={(v) => updateField('hsv_config', { ...editor.hsv_config, hsv_lower: [v, editor.hsv_config.hsv_lower[1], editor.hsv_config.hsv_lower[2]] })} />
@@ -261,7 +317,7 @@ export default function AsyncVisionPanel() {
           )}
 
           {/* Fingerprint */}
-          {editor.match_type === 'fingerprint' && (
+          {editor.match_type === 'match_fingerprint' && (
             <div className="async-editor-section">
               <h5 style={{ margin: '0 0 8px', fontSize: 13 }}>特征指纹配置</h5>
               <EditorNumberRow label="锚点 X" value={editor.fingerprint_config.anchor_x} onChange={(v) => updateField('fingerprint_config', { ...editor.fingerprint_config, anchor_x: v })} />
@@ -278,7 +334,7 @@ export default function AsyncVisionPanel() {
 
       {/* New button */}
       {!editor && (
-        <div style={{ marginBottom: 12 }}>
+        <div className="async-vision-toolbar">
           <button className="primary-button" onClick={startNew}>+ 新建后台识图</button>
         </div>
       )}
@@ -293,15 +349,21 @@ export default function AsyncVisionPanel() {
               <div className="monitor-card-head">
                 <strong>{m.name}</strong>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <span className={`runtime-badge ${m.enabled ? 'running' : 'idle'}`}>
-                    {m.enabled ? '启用' : '停用'}
-                  </span>
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
+                    <input
+                      type="checkbox"
+                      checked={m.enabled}
+                      disabled={togglingId === m.monitor_id}
+                      onChange={(e) => void handleToggleEnabled(m, e.target.checked)}
+                    />
+                    {togglingId === m.monitor_id ? '处理中…' : (m.enabled ? '启用' : '停用')}
+                  </label>
                   <button className="ghost-button icon-button" onClick={() => startEdit(m)}>编辑</button>
                   <button className="ghost-button icon-button danger" onClick={() => handleDelete(m.monitor_id)}>删除</button>
                 </div>
               </div>
               <p style={{ fontSize: 13, color: 'var(--muted)', margin: '4px 0 0' }}>
-                输出: {m.output_variable} · 类型: {MATCH_TYPES.find(([k]) => k === m.match_type)?.[1] ?? m.match_type} · 间隔: {m.scan_rate}ms
+                输出: {m.output_variable} · 类型: {MATCH_TYPES.find(([k]) => k === m.match_type)?.[1] ?? m.match_type} · 频率: {m.scan_rate === 'custom' ? `${m.custom_interval_ms}ms` : (SCAN_RATE_OPTIONS.find(([k]) => k === m.scan_rate)?.[1] ?? m.scan_rate)}
               </p>
             </article>
           ))}

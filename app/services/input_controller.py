@@ -98,6 +98,16 @@ _KEYEVENTF_KEYUP      = 0x0002
 _KEYEVENTF_EXTENDEDKEY = 0x0001
 _MAPVK_VK_TO_VSC      = 0   # MapVirtualKeyW: VK → 硬件扫描码
 
+_MOUSEEVENTF_MOVE        = 0x0001
+_MOUSEEVENTF_LEFTDOWN    = 0x0002
+_MOUSEEVENTF_LEFTUP      = 0x0004
+_MOUSEEVENTF_RIGHTDOWN   = 0x0008
+_MOUSEEVENTF_RIGHTUP     = 0x0010
+_MOUSEEVENTF_MIDDLEDOWN  = 0x0020
+_MOUSEEVENTF_MIDDLEUP    = 0x0040
+_MOUSEEVENTF_WHEEL       = 0x0800
+_MOUSEEVENTF_HWHEEL      = 0x1000
+
 # 需要附加 KEYEVENTF_EXTENDEDKEY 标志的 VK 码
 _EXTENDED_VK: frozenset[int] = frozenset({
     0x21,  # VK_PRIOR  (Page Up)
@@ -148,18 +158,26 @@ class _INPUT(ctypes.Structure):
 
 
 class WindowsInputController:
-    MOUSEEVENTF_LEFTDOWN   = 0x0002
-    MOUSEEVENTF_LEFTUP     = 0x0004
-    MOUSEEVENTF_RIGHTDOWN  = 0x0008
-    MOUSEEVENTF_RIGHTUP    = 0x0010
-    MOUSEEVENTF_MIDDLEDOWN = 0x0020
-    MOUSEEVENTF_MIDDLEUP   = 0x0040
-    MOUSEEVENTF_WHEEL      = 0x0800
-    MOUSEEVENTF_HWHEEL     = 0x1000
+    MOUSEEVENTF_LEFTDOWN   = _MOUSEEVENTF_LEFTDOWN
+    MOUSEEVENTF_LEFTUP     = _MOUSEEVENTF_LEFTUP
+    MOUSEEVENTF_RIGHTDOWN  = _MOUSEEVENTF_RIGHTDOWN
+    MOUSEEVENTF_RIGHTUP    = _MOUSEEVENTF_RIGHTUP
+    MOUSEEVENTF_MIDDLEDOWN = _MOUSEEVENTF_MIDDLEDOWN
+    MOUSEEVENTF_MIDDLEUP   = _MOUSEEVENTF_MIDDLEUP
+    MOUSEEVENTF_WHEEL      = _MOUSEEVENTF_WHEEL
+    MOUSEEVENTF_HWHEEL     = _MOUSEEVENTF_HWHEEL
     WHEEL_DELTA            = 120
 
     def __init__(self) -> None:
         self._user32 = ctypes.windll.user32
+        self._kernel32 = ctypes.windll.kernel32
+        # 声明 SendInput 的参数/返回类型，避免 64 位系统上指针被截断
+        self._user32.SendInput.argtypes = [
+            ctypes.c_uint,
+            ctypes.POINTER(_INPUT),
+            ctypes.c_int,
+        ]
+        self._user32.SendInput.restype = ctypes.c_uint
 
     def get_cursor_position(self) -> tuple[int, int]:
         point = _Point()
@@ -169,19 +187,18 @@ class WindowsInputController:
     def set_cursor_position(self, position: tuple[int, int]) -> None:
         self._user32.SetCursorPos(int(position[0]), int(position[1]))
 
-    def _mouse_click(self, button: str) -> None:
-        if button == "right":
-            down = self.MOUSEEVENTF_RIGHTDOWN
-            up   = self.MOUSEEVENTF_RIGHTUP
-        else:
-            down = self.MOUSEEVENTF_LEFTDOWN
-            up   = self.MOUSEEVENTF_LEFTUP
-        inputs = (_INPUT * 2)()
-        inputs[0].type = _INPUT_MOUSE
-        inputs[0].union.mi.dwFlags = down
-        inputs[1].type = _INPUT_MOUSE
-        inputs[1].union.mi.dwFlags = up
-        self._user32.SendInput(2, inputs, ctypes.sizeof(_INPUT))
+    def move_to(self, x: int, y: int) -> None:
+        self.set_cursor_position((x, y))
+
+    def _mouse_event(self, flags: int, data: int = 0) -> None:
+        self._user32.mouse_event(flags, 0, 0, data, 0)
+
+    def _mouse_click(self, button: str, press_ms: int = 35, release_settle_ms: int = 20) -> None:
+        self.mouse_down(button)
+        time.sleep(max(press_ms, 0) / 1000)
+        self.mouse_up(button)
+        if release_settle_ms > 0:
+            time.sleep(release_settle_ms / 1000)
 
     def _send_key(self, vk: int, key_up: bool = False) -> None:
         scan = self._user32.MapVirtualKeyW(vk, _MAPVK_VK_TO_VSC)
@@ -207,8 +224,58 @@ class WindowsInputController:
         if vk:
             self._send_key(vk, key_up=True)
 
+    def tap_key(self, key: str, settle_ms: int = 25) -> None:
+        self.press_key(key)
+        time.sleep(max(settle_ms, 0) / 1000)
+        self.release_key(key)
+
+    def activate_current_window(self, settle_ms: int = 120) -> bool:
+        hwnd = self._user32.GetForegroundWindow()
+        if not hwnd:
+            return False
+        self._user32.ShowWindow(hwnd, 5)
+        self._user32.SetForegroundWindow(hwnd)
+        self._user32.SetActiveWindow(hwnd)
+        self._user32.SetFocus(hwnd)
+        if settle_ms > 0:
+            time.sleep(settle_ms / 1000)
+        return bool(self._user32.GetForegroundWindow() == hwnd)
+
+    def activate_window_at_point(self, position: tuple[int, int], settle_ms: int = 120) -> bool:
+        x, y = int(position[0]), int(position[1])
+        hwnd = self._user32.WindowFromPoint(_Point(x=x, y=y))
+        if not hwnd:
+            return False
+        foreground = self._user32.GetForegroundWindow()
+        current_thread = self._kernel32.GetCurrentThreadId()
+        target_thread = self._user32.GetWindowThreadProcessId(hwnd, None)
+        foreground_thread = self._user32.GetWindowThreadProcessId(foreground, None) if foreground else 0
+        attached_to_target = False
+        attached_to_foreground = False
+        try:
+            if target_thread and target_thread != current_thread:
+                attached_to_target = bool(self._user32.AttachThreadInput(current_thread, target_thread, True))
+            if foreground_thread and foreground_thread != current_thread and foreground_thread != target_thread:
+                attached_to_foreground = bool(self._user32.AttachThreadInput(current_thread, foreground_thread, True))
+            self._user32.ShowWindow(hwnd, 5)
+            self._user32.BringWindowToTop(hwnd)
+            self._user32.SetForegroundWindow(hwnd)
+            self._user32.SetActiveWindow(hwnd)
+            self._user32.SetFocus(hwnd)
+        finally:
+            if attached_to_foreground and foreground_thread:
+                self._user32.AttachThreadInput(current_thread, foreground_thread, False)
+            if attached_to_target and target_thread:
+                self._user32.AttachThreadInput(current_thread, target_thread, False)
+        if settle_ms > 0:
+            time.sleep(settle_ms / 1000)
+        return bool(self._user32.GetForegroundWindow() == hwnd)
+
     def click_here(self, button: str = "left") -> None:
         self._mouse_click(button)
+
+    def click(self, button: str = "left") -> None:
+        self.click_here(button)
 
     def click_at(
         self,
@@ -219,8 +286,15 @@ class WindowsInputController:
         modifiers: list[str] | None = None,
         modifier_delay_ms: int = 50,
         click_count: int = 1,
+        pre_activate: bool = False,
+        activation_settle_ms: int = 120,
+        between_click_ms: int = 70,
+        press_ms: int = 35,
+        release_settle_ms: int = 20,
     ) -> None:
         original_position = self.get_cursor_position() if return_cursor else None
+        if pre_activate:
+            self.activate_window_at_point(target_position, settle_ms=activation_settle_ms)
         self.set_cursor_position(target_position)
         time.sleep(max(settle_ms, 0) / 1000)
 
@@ -231,8 +305,11 @@ class WindowsInputController:
                 pressed_modifiers.append(mod)
             if pressed_modifiers:
                 time.sleep(max(modifier_delay_ms, 0) / 1000)
-            for _ in range(max(1, click_count)):
-                self._mouse_click(button)
+            total_clicks = max(1, click_count)
+            for index in range(total_clicks):
+                self._mouse_click(button, press_ms=press_ms, release_settle_ms=release_settle_ms)
+                if index < total_clicks - 1 and between_click_ms > 0:
+                    time.sleep(between_click_ms / 1000)
             if pressed_modifiers:
                 time.sleep(max(modifier_delay_ms, 0) / 1000)
         finally:
@@ -266,11 +343,7 @@ class WindowsInputController:
         else:
             flag = self.MOUSEEVENTF_HWHEEL
             delta = self.WHEEL_DELTA * clicks * (1 if direction == "right" else -1)
-        inp = (_INPUT * 1)()
-        inp[0].type = _INPUT_MOUSE
-        inp[0].union.mi.mouseData = ctypes.c_ulong(delta & 0xFFFFFFFF)
-        inp[0].union.mi.dwFlags = flag
-        self._user32.SendInput(1, inp, ctypes.sizeof(_INPUT))
+        self._mouse_event(flag, delta)
 
     def mouse_down(self, button: str = "left") -> None:
         """按下鼠标按键不释放。"""

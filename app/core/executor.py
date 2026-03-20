@@ -50,6 +50,7 @@ class WorkflowExecutor(
         self._color_detector: Any = None
         self._feature_matcher: Any = None
         self._loop_lock = Lock()
+        self._state_lock = Lock()
         self._active_workflows: dict[str, Event] = {}
         self._active_threads: dict[str, Thread] = {}
         self._loop_stops: dict[str, Event] = {}
@@ -57,13 +58,41 @@ class WorkflowExecutor(
         self._toggle_cooldown_seconds = 0.5
         self._graph_runner = GraphRunner(self)
 
-    # ── Event emission ──
-
     def _emit_runtime_event(self, workflow_id: str, event: dict[str, Any]) -> None:
         if self._runtime_event_callback is not None:
             self._runtime_event_callback(workflow_id, event)
 
-    # ── Workflow lifecycle ──
+    def _snapshot_runtime_handles(self, workflow_id: str) -> tuple[Event | None, Thread | None, Event | None]:
+        with self._state_lock:
+            return (
+                self._active_workflows.get(workflow_id),
+                self._active_threads.get(workflow_id),
+                self._loop_stops.get(workflow_id),
+            )
+
+    def _try_register_workflow(self, workflow_id: str, stop_event: Event, thread: Thread, loop_stop: Event | None = None) -> bool:
+        with self._state_lock:
+            existing_thread = self._active_threads.get(workflow_id)
+            if existing_thread is not None and existing_thread.is_alive():
+                return False
+            existing_stop = self._active_workflows.get(workflow_id)
+            if existing_stop is not None and not existing_stop.is_set():
+                return False
+            self._active_workflows[workflow_id] = stop_event
+            self._active_threads[workflow_id] = thread
+            if loop_stop is None:
+                self._loop_stops.pop(workflow_id, None)
+            else:
+                self._loop_stops[workflow_id] = loop_stop
+            return True
+
+    def _finalize_workflow(self, workflow_id: str, stop_event: Event, thread: Thread) -> None:
+        with self._state_lock:
+            if self._active_workflows.get(workflow_id) is stop_event:
+                self._active_workflows.pop(workflow_id, None)
+            if self._active_threads.get(workflow_id) is thread:
+                self._active_threads.pop(workflow_id, None)
+            self._loop_stops.pop(workflow_id, None)
 
     def run_workflow(
         self,
@@ -77,23 +106,23 @@ class WorkflowExecutor(
             self._toggle_loop_workflow(workflow, settings, run_mode)
             return
 
-        if workflow.workflow_id in self._active_workflows:
-            self._logger(f"流程已在运行中，忽略本次触发：{workflow.name}", "warn")
-            return
-
         stop_event = Event()
-        self._active_workflows[workflow.workflow_id] = stop_event
-
         thread = Thread(
             target=self._execute_thread,
             args=(workflow, settings, stop_event, run_mode),
             daemon=True,
         )
-        self._active_threads[workflow.workflow_id] = thread
+        if not self._try_register_workflow(workflow.workflow_id, stop_event, thread):
+            self._logger(f"流程仍在运行或停止中，忽略本次触发：{workflow.name}", "warn")
+            self._emit_runtime_event(
+                workflow.workflow_id,
+                {"type": "status", "status": "stopping", "active": True, "message": f"流程仍在运行或停止中，暂不重复启动：{workflow.name}"},
+            )
+            return
         thread.start()
 
     def stop_workflow(self, workflow_id: str, timeout: float = 3.0) -> bool:
-        stop_event = self._active_workflows.get(workflow_id)
+        stop_event, thread, loop_stop = self._snapshot_runtime_handles(workflow_id)
         if stop_event is None:
             return False
         self._emit_runtime_event(
@@ -101,12 +130,20 @@ class WorkflowExecutor(
             {"type": "stopping", "message": "正在停止流程…"},
         )
         stop_event.set()
-        loop_stop = self._loop_stops.get(workflow_id)
         if loop_stop is not None:
             loop_stop.set()
-        thread = self._active_threads.get(workflow_id)
         if thread is not None:
             thread.join(timeout=timeout)
+            if thread.is_alive():
+                self._emit_runtime_event(
+                    workflow_id,
+                    {"type": "stopping", "message": "停止请求已发出，正在等待线程退出…"},
+                )
+            else:
+                self._emit_runtime_event(
+                    workflow_id,
+                    {"type": "status", "status": "idle", "active": False, "message": "流程已停止。"},
+                )
         return True
 
     def shutdown(self) -> None:
@@ -121,39 +158,50 @@ class WorkflowExecutor(
     ) -> None:
         wid = workflow.workflow_id
         now = time.time()
+        should_start = False
+        thread: Thread | None = None
+        stop_event: Event | None = None
+        loop_stop: Event | None = None
+
         with self._loop_lock:
+            active_stop, active_thread, active_loop_stop = self._snapshot_runtime_handles(wid)
+            if active_stop is not None and active_thread is not None and active_thread.is_alive():
+                self._logger(f"停止循环流程：{workflow.name}", "info")
+                self._emit_runtime_event(wid, {"type": "loop_stop", "message": f"正在停止循环：{workflow.name}"})
+                active_stop.set()
+                if active_loop_stop is not None:
+                    active_loop_stop.set()
+                self._toggle_cooldown.pop(wid, None)
+                return
+
             last = self._toggle_cooldown.get(wid, 0.0)
             if now - last < self._toggle_cooldown_seconds:
+                remaining_ms = int((self._toggle_cooldown_seconds - (now - last)) * 1000)
+                self._logger(f"循环切换过快，已忽略：{workflow.name}", "warn")
+                self._emit_runtime_event(
+                    wid,
+                    {"type": "toggle_throttled", "message": f"切换过快，已忽略本次触发（约 {max(1, remaining_ms)}ms 冷却）。"},
+                )
                 return
             self._toggle_cooldown[wid] = now
-
-            if wid in self._active_workflows:
-                self._logger(f"停止循环流程：{workflow.name}", "info")
-                self._emit_runtime_event(wid, {"type": "loop_stop", "message": f"循环已停止：{workflow.name}"})
-                stop_event = self._active_workflows.get(wid)
-                if stop_event is not None:
-                    stop_event.set()
-                loop_stop = self._loop_stops.get(wid)
-                if loop_stop is not None:
-                    loop_stop.set()
-                return
 
             self._logger(f"启动循环流程：{workflow.name}", "info")
             stop_event = Event()
             loop_stop = Event()
-            self._active_workflows[wid] = stop_event
-            self._loop_stops[wid] = loop_stop
+            thread = Thread(
+                target=self._execute_thread,
+                args=(workflow, settings, stop_event, run_mode),
+                daemon=True,
+            )
+            if not self._try_register_workflow(wid, stop_event, thread, loop_stop):
+                self._logger(f"循环流程仍在停止中，忽略本次启动：{workflow.name}", "warn")
+                self._emit_runtime_event(wid, {"type": "stopping", "message": f"循环仍在停止中，暂不重新启动：{workflow.name}"})
+                return
             self._emit_runtime_event(wid, {"type": "loop_start", "message": f"循环已启动：{workflow.name}"})
+            should_start = True
 
-        thread = Thread(
-            target=self._execute_thread,
-            args=(workflow, settings, stop_event, run_mode),
-            daemon=True,
-        )
-        self._active_threads[wid] = thread
-        thread.start()
-
-    # ── Execution core ──
+        if should_start and thread is not None:
+            thread.start()
 
     def _execute_thread(
         self,
@@ -163,20 +211,19 @@ class WorkflowExecutor(
         run_mode: dict[str, Any],
     ) -> None:
         wid = workflow.workflow_id
-        from threading import Lock as _Lock
+        from threading import Lock as _Lock, current_thread
+        running_thread = current_thread()
         context: dict[str, Any] = {"vars": {}, "vars_lock": _Lock(), "last_match": None}
 
-        use_graph = (
-            workflow.node_graph is not None
-            and isinstance(workflow.node_graph.get("nodes"), list)
-            and len(workflow.node_graph["nodes"]) > 0
-        )
+        node_graph = workflow.node_graph
+        if not isinstance(node_graph, dict) or not isinstance(node_graph.get("nodes"), list) or not node_graph.get("nodes"):
+            raise ValueError(f"流程 {workflow.name} 缺少合法 node_graph，无法执行。")
 
         def _run_once() -> None:
-            if use_graph:
-                self._graph_runner.execute(wid, workflow.node_graph, workflow_settings, context, stop_event)
-            else:
-                self._execute_steps(wid, workflow.actions, workflow_settings, context, stop_event)
+            node_count = len(node_graph.get("nodes", []))
+            edge_count = len(node_graph.get("edges", [])) if isinstance(node_graph.get("edges"), list) else 0
+            self._logger(f"进入图执行器：{workflow.name}，nodes={node_count}，edges={edge_count}", "info")
+            self._graph_runner.execute(wid, node_graph, workflow_settings, context, stop_event)
 
         try:
             self._emit_runtime_event(wid, {"type": "start", "message": f"开始执行：{workflow.name}"})
@@ -194,8 +241,9 @@ class WorkflowExecutor(
                     delay_ms = int(run_mode.get("loop_delay_ms", 50))
                     if delay_ms > 0 and loop_stop is not None:
                         loop_stop.wait(delay_ms / 1000)
-            elif run_mode["type"] == "count":
+            elif run_mode["type"] == "repeat_n":
                 count = max(1, int(run_mode.get("count", 1)))
+                self._logger(f"流程将按次数模式执行：{workflow.name}，共 {count} 次", "info")
                 for i in range(count):
                     if stop_event.is_set():
                         break
@@ -208,9 +256,7 @@ class WorkflowExecutor(
             self._logger(f"流程执行出错：{exc}", "error")
             self._emit_runtime_event(wid, {"type": "error", "message": str(exc)})
         finally:
-            self._active_workflows.pop(wid, None)
-            self._active_threads.pop(wid, None)
-            self._loop_stops.pop(wid, None)
+            self._finalize_workflow(wid, stop_event, running_thread)
             self._emit_runtime_event(wid, {"type": "end", "message": f"流程结束：{workflow.name}"})
             self._logger(f"流程结束：{workflow.name}", "info")
 
@@ -218,59 +264,9 @@ class WorkflowExecutor(
         mode_type = run_mode.get("type", "once")
         if mode_type == "toggle_loop":
             return "开关循环"
-        if mode_type == "count":
+        if mode_type == "repeat_n":
             return f"执行 {run_mode.get('count', 1)} 次"
         return "单次执行"
-
-    def _execute_visual_branch(
-        self,
-        workflow_id: str,
-        params: dict[str, Any],
-        found: bool,
-        workflow_settings: dict[str, Any],
-        context: dict[str, Any],
-        stop_event: Event | None,
-    ) -> None:
-        branch_key = "then_steps" if found else "else_steps"
-        raw_branch = params.get(branch_key, [])
-        if not raw_branch:
-            return
-        branch_steps = [self._coerce_action(item) for item in list(raw_branch)]
-        self._emit_runtime_event(
-            workflow_id,
-            {
-                "type": "branch",
-                "found": found,
-                "message": f"视觉检测 found={'true' if found else 'false'}，进入 {'then' if found else 'else'} 分支。",
-            },
-        )
-        self._execute_steps(workflow_id, branch_steps, workflow_settings, context, stop_event)
-
-    def _execute_steps(
-        self,
-        workflow_id: str,
-        actions: list[ActionDefinition],
-        workflow_settings: dict[str, Any],
-        context: dict[str, Any],
-        stop_event: Event | None,
-    ) -> None:
-        for step_index, action in enumerate(actions):
-            if stop_event is not None and stop_event.is_set():
-                return
-            self._emit_runtime_event(workflow_id, {
-                "type": "step_enter",
-                "step_index": step_index,
-                "step_kind": action.kind,
-                "step_title": action.title,
-            })
-            try:
-                self._execute_action(workflow_id, action, workflow_settings, context, stop_event)
-            finally:
-                self._emit_runtime_event(workflow_id, {
-                    "type": "step_exit",
-                    "step_index": step_index,
-                    "step_kind": action.kind,
-                })
 
     def _execute_action(
         self,
@@ -287,15 +283,15 @@ class WorkflowExecutor(
             "key_sequence": lambda params: self._handle_key_sequence(workflow_id, params, workflow_settings, stop_event),
             "detect_image": lambda params: self._handle_detect_image(workflow_id, params, workflow_settings, context, stop_event),
             "click_point": lambda params: self._handle_click_point(workflow_id, params, context, stop_event),
-            "if_var_found": lambda params: self._handle_if_var_found(workflow_id, params, workflow_settings, context, stop_event),
-            "if_condition": lambda params: self._handle_if_condition(workflow_id, params, workflow_settings, context, stop_event),
+            "if_var_found": lambda params: self._handle_if_var_found(workflow_id, params, context),
+            "if_condition": lambda params: self._handle_if_condition(workflow_id, params, context),
             "set_variable_state": lambda params: self._handle_set_variable_state(workflow_id, params, context),
-            "key_hold": lambda params: self._handle_key_hold(workflow_id, params, workflow_settings, context, stop_event),
+            "key_hold": lambda params: self._handle_key_hold(workflow_id, params, stop_event),
             "detect_click_return": lambda params: self._handle_detect_click_return(workflow_id, params, workflow_settings, context, stop_event),
             "mouse_scroll": lambda params: self._handle_mouse_scroll(workflow_id, params, stop_event),
             "mouse_hold": lambda params: self._handle_mouse_hold(workflow_id, params, context, stop_event),
             "detect_color": lambda params: self._handle_detect_color(workflow_id, params, workflow_settings, context, stop_event),
-            "loop": lambda params: self._handle_loop(workflow_id, params, workflow_settings, context, stop_event),
+            "loop": lambda params: self._handle_loop(workflow_id, params),
             "call_workflow": lambda params: self._handle_call_workflow(workflow_id, params, stop_event),
             "log": lambda params: self._handle_log(workflow_id, params, context),
             "mouse_drag": lambda params: self._handle_mouse_drag(workflow_id, params, context, stop_event),
@@ -312,8 +308,6 @@ class WorkflowExecutor(
         if handler is None:
             raise ValueError(f"不支持的动作类型：{action.kind}")
         handler(action.params)
-
-    # ── Shared utilities (used by handler mixins) ──
 
     def _resolve_delay_ms(self, params: dict[str, Any], workflow_settings: dict[str, Any], field: str = "milliseconds") -> int:
         if "setting_key" in params:
@@ -416,17 +410,3 @@ class WorkflowExecutor(
         current_value = self._snapshot_local_var(context, var_name)
         payload = self._build_manual_variable_payload(current_value, found)
         return self._set_local_var(context, var_name, payload)
-
-    def _coerce_action(self, payload: Any) -> ActionDefinition:
-        if isinstance(payload, ActionDefinition):
-            return payload
-        if not isinstance(payload, dict):
-            return ActionDefinition(kind="delay", title="延迟", description="", params={"milliseconds": 100})
-        kind = str(payload.get("kind", payload.get("type", "delay"))).strip()
-        params = {k: v for k, v in payload.items() if k not in ("kind", "type", "title", "description")}
-        return ActionDefinition(
-            kind=kind,
-            title=str(payload.get("title", kind)).strip() or kind,
-            description=str(payload.get("description", "")).strip(),
-            params=params,
-        )

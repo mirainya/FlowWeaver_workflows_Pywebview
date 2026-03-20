@@ -186,10 +186,7 @@ class DesktopApi:
 
     def test_template_match(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
-            result = self._application.test_template_match(
-                template_path=str(payload.get("template_path", "")),
-                confidence=float(payload.get("confidence", 0.88)),
-            )
+            result = self._application.test_template_match(payload)
             return {"ok": True, **result}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}

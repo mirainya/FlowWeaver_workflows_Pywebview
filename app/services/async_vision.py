@@ -170,6 +170,7 @@ class AsyncVisionManager:
             "not_found_action": str(monitor.get("not_found_action", "keep_last")),
             "match_mode": str(monitor.get("match_mode", "normal")),
             "custom_confidence": float(monitor.get("custom_confidence", 0.88)),
+            "custom_interval_ms": int(monitor.get("custom_interval_ms", 350)),
             "follow_radius": int(monitor.get("follow_radius", 220)),
             "recover_after_misses": int(monitor.get("recover_after_misses", 2)),
             "stale_after_ms": int(monitor.get("stale_after_ms", 1200)),
@@ -413,10 +414,11 @@ class AsyncVisionManager:
             raise _MonitorConfigError("缺少模板图片。")
         if not template_path.exists():
             raise _MonitorConfigError(f"模板图片不存在：{template_path.name}")
-        return matcher.match(
-            template_path=str(template_path),
+        return matcher.locate_on_screen_details(
+            template_path=template_path,
             confidence=_effective_confidence(monitor),
-            region=search_region,
+            search_region=search_region,
+            capture_once=True,
             stop_event=stop_event,
         )
 

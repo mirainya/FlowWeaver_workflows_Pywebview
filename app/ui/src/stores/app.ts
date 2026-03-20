@@ -1,10 +1,22 @@
 import { create } from 'zustand';
 import type { Workflow } from '../models/workflow';
-import type { AsyncMonitor } from '../models/async-vision';
+import type { AsyncMonitor, SharedVariableSnapshot } from '../models/async-vision';
 import type { SummaryData, AppInfo, ArchitectureItem, LogEntry, RuntimeSnapshot, KeyEvent, WorkflowRuntimeState } from '../api/bridge';
 import { normalizeWorkflow } from '../models/workflow';
-import { normalizeAsyncMonitor } from '../models/async-vision';
+import { normalizeAsyncMonitor, normalizeSharedVariableSnapshots } from '../models/async-vision';
 import { api } from '../api/bridge';
+
+export function runtimeBadgeTone(status?: string): 'idle' | 'running' | 'stopping' | 'error' {
+  if (status === 'error') return 'error';
+  if (status === 'stopping') return 'stopping';
+  if (status === 'running' || status === 'looping' || status === 'success') return 'running';
+  return 'idle';
+}
+
+export function isWorkflowVisibleInRuntime(state?: WorkflowRuntimeState): boolean {
+  if (!state) return false;
+  return state.active || state.status === 'stopping' || state.status === 'error';
+}
 
 /* ── Theme ── */
 
@@ -26,7 +38,7 @@ function loadSavedTheme(): Theme {
 
 /* ── Tab ── */
 
-export type TabKey = 'flows' | 'async_vision' | 'settings' | 'about';
+export type TabKey = 'flows' | 'asyncVision' | 'settings' | 'about';
 
 export interface TabDef {
   key: TabKey;
@@ -35,8 +47,8 @@ export interface TabDef {
 }
 
 export const APP_TABS: TabDef[] = [
-  { key: 'flows', label: '流程', description: '查看、搜索、执行和管理全部流程。' },
-  { key: 'async_vision', label: '后台识图', description: '后台持续识图，并把结果写入共享数据。' },
+  { key: 'flows', label: '流程', description: '查看、搜索、执行流程，并进入流程编辑器。' },
+  { key: 'asyncVision', label: '后台识图', description: '查看、创建并维护后台识图配置。' },
   { key: 'settings', label: '设置', description: '切换主题并查看当前界面配置。' },
   { key: 'about', label: '关于', description: '查看产品说明、架构约定和配置位置。' },
 ];
@@ -66,7 +78,7 @@ export interface AppState {
   summary: SummaryData;
   appInfo: AppInfo;
   architecture: ArchitectureItem[];
-  sharedVariables: Record<string, unknown>;
+  sharedVariables: SharedVariableSnapshot[];
 
   // Runtime
   runtime: RuntimeSnapshot;
@@ -89,6 +101,7 @@ export interface AppState {
   // Polling
   pollRuntime: () => Promise<void>;
   pollLogs: () => Promise<void>;
+  pollAsyncVision: () => Promise<void>;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -113,7 +126,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   summary: { workflow_count: 0, enabled_count: 0, visual_count: 0, loop_count: 0, active_loop_count: 0 },
   appInfo: { version: '--', workflow_source: '--' },
   architecture: [],
-  sharedVariables: {},
+  sharedVariables: [],
 
   // Runtime
   runtime: { workflow_states: {}, key_events: [] },
@@ -142,13 +155,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await api.bootstrap();
       const workflows = (data.workflows ?? []).map((w) => normalizeWorkflow(w));
       const asyncMonitors = (data.async_monitors ?? []).map((m) => normalizeAsyncMonitor(m));
+      const sharedVariables = normalizeSharedVariableSnapshots(data.shared_variables);
       set({
         workflows,
         asyncMonitors,
         summary: data.summary ?? get().summary,
         appInfo: data.app ?? get().appInfo,
         architecture: data.architecture ?? [],
-        sharedVariables: data.shared_variables ?? {},
+        sharedVariables,
+        runtime: data.runtime ?? get().runtime,
+        logs: data.logs ?? get().logs,
         bootstrapDone: true,
       });
     } catch (err) {
@@ -167,6 +183,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const logs = await api.listLogs();
       set({ logs });
+    } catch { /* noop */ }
+  },
+  pollAsyncVision: async () => {
+    try {
+      const snapshot = await api.getAsyncVisionSnapshot();
+      set({
+        asyncMonitors: (snapshot.monitors ?? []).map((m) => normalizeAsyncMonitor(m)),
+        sharedVariables: normalizeSharedVariableSnapshots(snapshot.shared_variables),
+      });
     } catch { /* noop */ }
   },
 }));

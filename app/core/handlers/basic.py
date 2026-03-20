@@ -34,7 +34,21 @@ class BasicHandlersMixin:
         keys = str(params.get("keys", "")).strip()
         if not keys:
             return
-        self._press_combo(workflow_id, keys, "key_tap")
+
+        is_plain_key = len(keys) == 1 and keys.strip() and "+" not in keys
+        if is_plain_key:
+            self._input.tap_key(keys)
+            self._emit_runtime_event(
+                workflow_id,
+                {
+                    "type": "key",
+                    "key": keys,
+                    "source": "tap",
+                },
+            )
+        else:
+            self._press_combo(workflow_id, keys, "tap")
+
         delay_ms = self._resolve_delay_ms(params, workflow_settings, field="delay_ms_after")
         self._wait_delay(delay_ms, stop_event)
 

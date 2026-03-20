@@ -5,7 +5,7 @@ export default function TabStrip() {
 
   function getCount(key: TabKey): number | undefined {
     if (key === 'flows') return workflows.length;
-    if (key === 'async_vision') return asyncMonitors.length;
+    if (key === 'asyncVision') return asyncMonitors.length;
     return undefined;
   }
 

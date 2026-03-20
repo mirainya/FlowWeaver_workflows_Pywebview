@@ -7,7 +7,7 @@ import { stepTypeLabel, stepHasBranch, branchLabels } from '../../models/step';
 type StepNodeType = Node<StepNodeData, 'stepNode'>;
 
 function StepNode({ data }: NodeProps<StepNodeType>) {
-  const { step, stepIndex } = data;
+  const { step, stepIndex, isRunning } = data;
   const color = getKindColor(step.kind);
   const group = getKindGroup(step.kind);
   const label = stepTypeLabel(step.kind);
@@ -21,7 +21,7 @@ function StepNode({ data }: NodeProps<StepNodeType>) {
   if (step.kind === 'key_tap') summary = String(step.keys ?? '');
   else if (step.kind === 'delay') summary = `${step.milliseconds ?? 0}ms`;
   else if (step.kind === 'detect_image') summary = String(step.template_path ?? '').split(/[/\\]/).pop() ?? '';
-  else if (step.kind === 'click_point') summary = step.source === 'var' ? `变量: ${step.var_name}` : `(${step.x}, ${step.y})`;
+  else if (step.kind === 'click_point') summary = (step.source === 'var' || step.source === 'shared') ? `变量: ${step.var_name}` : `(${step.x}, ${step.y})`;
   else if (step.kind === 'log') summary = String(step.message ?? '');
   else if (step.kind === 'call_workflow') summary = String(step.target_workflow_id ?? '');
   else if (step.kind === 'if_var_found') summary = `${step.var_name ?? 'target'}`;
@@ -34,13 +34,14 @@ function StepNode({ data }: NodeProps<StepNodeType>) {
   else if (step.kind === 'match_fingerprint') { const sp = Array.isArray(step.sample_points) ? step.sample_points : []; summary = `锚点(${step.anchor_x},${step.anchor_y}) ${sp.length}点`; }
 
   return (
-    <div className={`step-node${isOrphan ? ' step-node-orphan' : ''}`} style={{ borderColor: color }}>
+    <div className={`step-node${isOrphan ? ' step-node-orphan' : ''}${isRunning ? ' step-node-running' : ''}`} style={{ borderColor: color }}>
       <Handle type="target" position={Position.Top} id="top" className="step-handle" />
 
       <div className="step-node-header" style={{ background: `${color}18` }}>
         <span className="step-node-index">{isOrphan ? '—' : stepIndex + 1}</span>
         <span className="step-node-group" style={{ color }}>{group}</span>
         <span className="step-node-kind">{label}</span>
+        {isRunning && <span className="step-node-state">运行中</span>}
       </div>
 
       {summary && (

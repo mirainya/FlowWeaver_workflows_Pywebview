@@ -15,10 +15,11 @@ import LogPanel from './components/panels/LogPanel';
 import DesignerPanel from './components/designer/DesignerPanel';
 
 export default function App() {
-  const { activeTab, bootstrapDone, loadBootstrap, pollRuntime, pollLogs } = useAppStore();
+  const { activeTab, bootstrapDone, loadBootstrap, pollRuntime, pollLogs, pollAsyncVision } = useAppStore();
   const designerOpen = useDesignerStore((s) => s.isOpen);
   const runtimeTimer = useRef<ReturnType<typeof setInterval>>();
   const logTimer = useRef<ReturnType<typeof setInterval>>();
+  const asyncVisionTimer = useRef<ReturnType<typeof setInterval>>();
 
   useEffect(() => {
     // Wait for pywebview API to be ready
@@ -43,11 +44,13 @@ export default function App() {
     // Start polling
     runtimeTimer.current = setInterval(pollRuntime, 700);
     logTimer.current = setInterval(pollLogs, 1400);
+    asyncVisionTimer.current = setInterval(pollAsyncVision, 900);
     return () => {
       clearInterval(runtimeTimer.current);
       clearInterval(logTimer.current);
+      clearInterval(asyncVisionTimer.current);
     };
-  }, [bootstrapDone, pollRuntime, pollLogs]);
+  }, [bootstrapDone, pollRuntime, pollLogs, pollAsyncVision]);
 
   // Apply saved theme on mount
   useEffect(() => {
@@ -77,7 +80,7 @@ export default function App() {
           <Toast />
 
           {activeTab === 'flows' && <WorkflowGrid />}
-          {activeTab === 'async_vision' && <AsyncVisionPanel />}
+          {activeTab === 'asyncVision' && <AsyncVisionPanel />}
           {activeTab === 'settings' && <SettingsPanel />}
           {activeTab === 'about' && <AboutPanel />}
         </section>

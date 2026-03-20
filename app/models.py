@@ -80,8 +80,7 @@ class WorkflowDefinition:
     description: str
     category: str
     tab_key: str
-    default_hotkey: str
-    actions: list[ActionDefinition]
+    hotkey: str
     notes: list[str] = field(default_factory=list)
     settings: list[WorkflowSettingDefinition] = field(default_factory=list)
     run_mode: dict[str, Any] = field(default_factory=lambda: {"type": "once"})
@@ -134,7 +133,6 @@ class WorkflowDefinition:
             "description": self.description,
             "category": self.category,
             "tab_key": self.tab_key,
-            "default_hotkey": self.default_hotkey,
             "binding": binding.to_dict(),
             "notes": list(self.notes),
             "issues": issues or [],
@@ -147,6 +145,5 @@ class WorkflowDefinition:
                 setting.to_dict(normalized_settings.get(setting.key))
                 for setting in self.settings
             ],
-            "actions": [action.to_dict() for action in self.actions],
             "node_graph": self.node_graph,
         }

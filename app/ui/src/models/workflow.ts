@@ -1,5 +1,3 @@
-import type { Step } from './step';
-import { normalizeSteps } from './step';
 
 /* ── Run mode ── */
 
@@ -42,12 +40,10 @@ export interface Workflow {
   definition_editable: boolean;
   is_loop: boolean;
   run_mode: RunMode;
-  steps: Step[];
-  actions?: unknown[];
   binding?: WorkflowBinding;
   notes?: string[];
   settings?: unknown[];
-  node_graph?: NodeGraph | null;
+  node_graph: NodeGraph | null;
 }
 
 /* ── Node graph (for node editor) ── */
@@ -83,7 +79,25 @@ export interface DesignerState {
   description: string;
   enabled: boolean;
   run_mode: RunMode;
-  steps: Step[];
+}
+
+export function createEmptyNodeGraph(): NodeGraph {
+  return {
+    nodes: [
+      { id: '__start__', kind: '__start__', position: { x: 80, y: 60 }, params: {} },
+      { id: '__end__default', kind: '__end__', position: { x: 80, y: 220 }, params: {} },
+    ],
+    edges: [
+      {
+        id: 'edge-__start__-__end__default',
+        source: '__start__',
+        sourceHandle: 'bottom',
+        target: '__end__default',
+        targetHandle: 'top',
+      },
+    ],
+    viewport: { x: 0, y: 0, zoom: 1 },
+  };
 }
 
 export function createEmptyDesigner(): DesignerState {
@@ -94,16 +108,19 @@ export function createEmptyDesigner(): DesignerState {
     description: '',
     enabled: true,
     run_mode: { type: 'once' },
-    steps: [{ kind: 'key_tap', keys: '', delay_ms_after: 100 }],
   };
 }
 
 /* ── Normalize workflow ── */
 
 export function normalizeWorkflow(raw: Record<string, unknown>): Workflow {
-  const steps = Array.isArray(raw.steps)
-    ? normalizeSteps(raw.steps as Record<string, unknown>[])
-    : [];
+  const binding = raw.binding && typeof raw.binding === 'object'
+    ? raw.binding as WorkflowBinding
+    : undefined;
+
+  const nodeGraph = raw.node_graph && typeof raw.node_graph === 'object'
+    ? raw.node_graph as NodeGraph
+    : null;
 
   return {
     workflow_id: String(raw.workflow_id ?? ''),
@@ -115,12 +132,9 @@ export function normalizeWorkflow(raw: Record<string, unknown>): Workflow {
     definition_editable: Boolean(raw.definition_editable),
     is_loop: Boolean(raw.is_loop),
     run_mode: normalizeRunMode(raw.run_mode),
-    steps,
-    actions: Array.isArray(raw.actions) ? raw.actions : [],
-    binding: raw.binding && typeof raw.binding === 'object'
-      ? raw.binding as WorkflowBinding
-      : { hotkey: String(raw.default_hotkey ?? ''), enabled: true },
+    binding,
     notes: Array.isArray(raw.notes) ? raw.notes as string[] : [],
-    node_graph: (raw.node_graph as NodeGraph) ?? null,
+    settings: Array.isArray(raw.settings) ? raw.settings : [],
+    node_graph: nodeGraph,
   };
 }

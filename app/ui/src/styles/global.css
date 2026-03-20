@@ -372,6 +372,16 @@ a {
   color: var(--success);
 }
 
+.runtime-badge.stopping {
+  background: rgba(251, 191, 36, 0.16);
+  color: #fbbf24;
+}
+
+.runtime-badge.error {
+  background: rgba(248, 113, 113, 0.14);
+  color: #f87171;
+}
+
 /* ── Empty state ── */
 .empty-state {
   text-align: center;
@@ -812,11 +822,47 @@ a {
   color: var(--muted);
 }
 
-/* ── Workflow grid ── */
+/* ── Workflow workspace ── */
+.workflow-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.workspace-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.workspace-section-secondary {
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.workspace-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workspace-section-head h4 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.workspace-section-head p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .workflow-filter-bar {
   display: flex;
   gap: 8px;
-  margin-bottom: 14px;
+  margin-bottom: 0;
 }
 
 .workflow-search {
@@ -907,6 +953,36 @@ a {
 }
 
 /* ── Async monitor list ── */
+.async-vision-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.async-vision-panel.embedded .async-editor {
+  margin-bottom: 0 !important;
+}
+
+.async-vision-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.async-editor {
+  padding: 16px;
+}
+
+.async-editor-section + .async-editor-section {
+  margin-top: 14px;
+}
+
+.async-editor-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
 .async-monitor-list {
   display: flex;
   flex-direction: column;
@@ -1277,12 +1353,223 @@ a {
   position: relative;
 }
 
+.node-editor-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .node-editor-canvas {
   flex: 1;
   border-radius: 8px;
   overflow: hidden;
   border: 1px solid var(--line);
   background: var(--bg);
+  position: relative;
+}
+
+.node-runtime-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.82);
+  backdrop-filter: blur(10px);
+  color: var(--text);
+  font-size: 12px;
+  box-shadow: var(--shadow);
+}
+
+.node-runtime-banner .runtime-badge {
+  flex-shrink: 0;
+}
+
+.node-runtime-banner > span:not(.runtime-badge) {
+  min-width: 0;
+}
+
+.node-runtime-banner-click,
+.node-runtime-banner-warning {
+  word-break: break-word;
+}
+
+.node-runtime-banner-warning {
+  flex-basis: 100%;
+  color: #fbbf24;
+  font-weight: 600;
+}
+
+.node-runtime-banner-click {
+  color: #93c5fd;
+}
+
+.node-runtime-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.shared-variable-monitor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.68);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow);
+}
+
+.shared-variable-monitor-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+}
+
+.shared-variable-monitor-head span {
+  color: var(--muted);
+}
+
+.shared-variable-monitor-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.shared-variable-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.shared-variable-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.shared-variable-card-head strong {
+  display: block;
+  font-size: 13px;
+}
+
+.shared-variable-card-head span {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.shared-variable-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.shared-variable-card-tip {
+  color: #fbbf24;
+}
+
+.shared-variable-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.shared-variable-badge.running {
+  background: rgba(34, 197, 94, 0.16);
+  color: #4ade80;
+}
+
+.shared-variable-badge.warn {
+  background: rgba(251, 191, 36, 0.16);
+  color: #fbbf24;
+}
+
+.shared-variable-badge.idle {
+  background: rgba(148, 163, 184, 0.16);
+  color: #cbd5f5;
+}
+
+.shared-variable-badge.error {
+  background: rgba(248, 113, 113, 0.16);
+  color: #fca5a5;
+}
+
+.variable-selector-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.variable-selector-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.variable-selector-chip:hover,
+.variable-selector-chip.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(96, 165, 250, 0.08);
+}
+
+.variable-selector-chip-meta {
+  font-size: 10px;
+  opacity: 0.9;
+}
+
+.variable-selector-summary {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+@media (max-width: 1100px) {
+  .node-editor-main {
+    gap: 8px;
+  }
+
+  .node-runtime-banner {
+    padding: 8px 10px;
+  }
+}
+
+@media (max-width: 860px) {
+  .node-runtime-banner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .node-editor-container {
+    flex-direction: column;
+  }
 }
 
 .node-editor-canvas .react-flow__background {
@@ -1342,6 +1629,17 @@ a {
   box-shadow: 0 0 0 2px var(--accent), var(--shadow);
 }
 
+.step-node-running {
+  border-color: #22c55e !important;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.9), 0 0 18px rgba(34, 197, 94, 0.28), var(--shadow);
+  animation: step-node-pulse 0.9s ease-in-out infinite alternate;
+}
+
+.react-flow__node.selected .step-node-running {
+  border-color: #22c55e !important;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.95), 0 0 18px rgba(34, 197, 94, 0.28), var(--shadow);
+}
+
 .step-node-header {
   display: flex;
   align-items: center;
@@ -1365,6 +1663,16 @@ a {
   font-size: 12px;
   font-weight: 600;
   color: var(--text);
+}
+
+.step-node-state {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.16);
+  color: #22c55e;
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .step-node-body {
@@ -1716,6 +2024,32 @@ a {
 }
 
 /* ── Orphan node (not connected to start) ── */
+
+@media (max-width: 900px) {
+  .workflow-filter-bar {
+    flex-wrap: wrap;
+  }
+
+  .workflow-search,
+  .workflow-filter-select {
+    width: 100%;
+  }
+
+  .workspace-section-head,
+  .monitor-card-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@keyframes step-node-pulse {
+  from {
+    box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.82), 0 0 12px rgba(34, 197, 94, 0.2), var(--shadow);
+  }
+  to {
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.98), 0 0 24px rgba(34, 197, 94, 0.34), var(--shadow);
+  }
+}
 
 .step-node-orphan {
   opacity: 0.45;
